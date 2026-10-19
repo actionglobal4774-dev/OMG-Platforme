@@ -1,0 +1,301 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isFounder() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.isFounder == true;
+    }
+
+    match /users/{userId} {
+      allow read, create, update: if isOwner(userId) || isFounder();
+      allow delete: if false;
+
+      match /moduleData/{allPaths=**} {
+        // Les donnees module sont servies par des fonctions callable qui appliquent
+        // la propriete, la validation et l'audit. Aucun acces client direct.
+        allow read, write: if false;
+      }
+    }
+
+    match /moduleDataAudit/{auditId} {
+      allow read: if isFounder();
+      allow create, update, delete: if false;
+    }
+
+    match /kycRequests/{requestId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /payflowAgentRequests/{requestId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /moduleActionRequests/{requestId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /moduleAccounts/{accountId} {
+      allow create, update: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.passwordStorageRule == 'password_must_be_handled_by_auth_or_server_hash_never_plaintext';
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow delete: if false;
+    }
+
+    match /moduleSecurityAudit/{auditId} {
+      allow create, update, delete: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+    }
+
+    match /payflowTransferDrafts/{draftId} {
+      allow create, update, delete: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+    }
+
+    match /payflowMoneyRequests/{requestId} {
+      allow create, update, delete: if false;
+      allow read: if isOwner(resource.data.requesterUserId) || isFounder();
+    }
+
+    match /payflowReceiptSessions/{sessionId} {
+      allow create, update, delete: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+    }
+
+    match /communicationsQueue/{messageId} {
+      allow create: if signedIn() && request.resource.data.requestedBy == request.auth.uid;
+      allow read: if isOwner(resource.data.userId) || isOwner(resource.data.requestedBy) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /supportTickets/{ticketId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isOwner(resource.data.userId) || isFounder();
+      allow delete: if false;
+    }
+
+    match /userNotifications/{noticeId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder() || (
+        isOwner(resource.data.userId)
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'readAt', 'updatedAt'])
+      );
+      allow delete: if false;
+    }
+
+    match /payflowQuotes/{quoteId} {
+      allow create: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update, delete: if false;
+    }
+
+    match /payflowQrSessions/{sessionId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.payeeUserId ||
+        request.auth.uid == resource.data.usedBy ||
+        isFounder()
+      );
+    }
+
+    match /payflowQrReceipts/{receiptId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.payerUserId ||
+        request.auth.uid == resource.data.payeeUserId ||
+        isFounder()
+      );
+    }
+
+    match /payflowWallets/{walletId} {
+      allow create, update, delete: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+    }
+
+    match /paymentPreparations/{paymentId} {
+      allow create: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /transactionAudit/{auditId} {
+      allow create, update, delete: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+    }
+
+    match /storeProductPricing/{pricingId} {
+      allow create: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /storeProducts/{productId} {
+      allow create, update, delete: if false;
+      allow read: if resource.data.status == "active" ||
+        (signedIn() && (request.auth.uid == resource.data.merchantUserId || isFounder()));
+    }
+
+    match /storeOrders/{orderId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.customerUserId ||
+        request.auth.uid in resource.data.merchantUserIds ||
+        isFounder()
+      );
+    }
+
+    match /storeInventory/{productId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn();
+    }
+
+    match /storeMerchantLedger/{entryId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.merchantUserId || isFounder()
+      );
+    }
+
+    match /mailportDeliveries/{deliveryId} {
+      allow create: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.confirmedBy ||
+        request.auth.uid == resource.data.carrierUserId ||
+        request.auth.uid == resource.data.addressOwnerUserId ||
+        isFounder()
+      );
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /mailportAddresses/{addressId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        resource.data.publicListing == true ||
+        request.auth.uid == resource.data.ownerUserId ||
+        isFounder()
+      );
+    }
+
+    match /mailportAddressPurchases/{purchaseId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.buyerUserId ||
+        request.auth.uid == resource.data.ownerUserId ||
+        isFounder()
+      );
+    }
+
+    match /platformRevenue/{revenueId} {
+      allow create, update, delete: if false;
+      allow read: if isFounder();
+    }
+
+    match /mailportPackages/{packageId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.customerUserId ||
+        request.auth.uid == resource.data.addressOwnerUserId ||
+        request.auth.uid == resource.data.carrierUserId ||
+        isFounder()
+      );
+    }
+
+    match /mailportPackageEvents/{eventId} {
+      allow create, update, delete: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.actorUserId || isFounder()
+      );
+    }
+
+    match /payflowRewardLedger/{rewardId} {
+      allow create: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /healthAppointments/{appointmentId} {
+      allow create: if false;
+      allow read: if signedIn() && (
+        request.auth.uid == resource.data.patientUserId ||
+        request.auth.uid == resource.data.professionalUserId ||
+        isFounder()
+      );
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /travelReservationRequests/{reservationId} {
+      allow create, update, delete: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+    }
+
+    match /payflowAgents/{agentUserId} {
+      allow create: if false;
+      allow read: if isOwner(agentUserId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /paypalOrders/{orderId} {
+      allow create: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /userRoles/{roleId} {
+      allow create: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /moduleWorkflowEvents/{eventId} {
+      allow create: if false;
+      allow read: if isOwner(resource.data.userId) || isFounder();
+      allow update, delete: if false;
+    }
+
+    match /adminUsers/{userId} {
+      allow read: if isOwner(userId) || isFounder();
+      // La creation du premier administrateur se fait uniquement via
+      // Firebase Admin SDK ou un processus d'exploitation controle.
+      allow create: if false;
+      allow update: if isFounder();
+      allow delete: if false;
+    }
+
+    match /adminAudit/{auditId} {
+      allow create, read: if isFounder();
+      allow update, delete: if false;
+    }
+  }
+}

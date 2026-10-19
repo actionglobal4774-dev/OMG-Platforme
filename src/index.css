@@ -1,0 +1,368 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, Arial, sans-serif;
+  background: #000;
+  color: #f8fafc;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 50% 12%, rgba(11, 143, 60, 0.22), transparent 28rem),
+    radial-gradient(circle at 10% 90%, rgba(212, 175, 55, 0.16), transparent 22rem),
+    #000;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    linear-gradient(rgba(212, 175, 55, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(11, 143, 60, 0.05) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at 50% 35%, #000, transparent 72%);
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 50% 40%, transparent 0 9rem, rgba(11, 143, 60, 0.06) 9.1rem 9.4rem, transparent 9.5rem 14rem),
+    radial-gradient(circle at 50% 40%, transparent 0 15rem, rgba(212, 175, 55, 0.05) 15.1rem 15.35rem, transparent 15.4rem);
+  pointer-events: none;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.omg-card {
+  border: 1px solid rgba(212, 175, 55, 0.55);
+  background:
+    linear-gradient(145deg, rgba(10, 16, 13, 0.96), rgba(0, 0, 0, 0.92)),
+    rgba(5, 8, 7, 0.9);
+  box-shadow: 0 0 24px rgba(11, 143, 60, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+.omg-focus:focus-visible {
+  outline: 3px solid #d4af37;
+  outline-offset: 3px;
+}
+
+.omg-shell {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 50% 8%, rgba(11, 143, 60, 0.24), transparent 28rem),
+    radial-gradient(circle at 8% 86%, rgba(212, 175, 55, 0.18), transparent 22rem),
+    #000;
+}
+
+.omg-operation-canvas {
+  background:
+    radial-gradient(circle at 96% 3%, rgba(11, 143, 60, 0.10), transparent 20rem),
+    linear-gradient(180deg, #f7faf8 0%, #eef5f1 100%);
+  color: #0f172a;
+}
+
+.omg-module-rail {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212, 175, 55, 0.8) transparent;
+}
+
+.omg-module-rail::-webkit-scrollbar { height: 5px; }
+.omg-module-rail::-webkit-scrollbar-thumb { background: rgba(212, 175, 55, 0.8); border-radius: 999px; }
+
+.omg-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+}
+
+.omg-module-card {
+  min-height: 138px;
+  position: relative;
+  overflow: hidden;
+  text-decoration: none;
+  transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.omg-module-card::before {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  background: conic-gradient(from 180deg, transparent, rgba(212, 175, 55, 0.22), transparent, rgba(11, 143, 60, 0.16), transparent);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.omg-module-card:hover {
+  transform: translateY(-4px);
+  border-color: #0b8f3c;
+  box-shadow: 0 0 30px rgba(11, 143, 60, 0.26);
+}
+
+.omg-module-card:hover::before {
+  opacity: 1;
+}
+
+.omg-module-card > * {
+  position: relative;
+}
+
+.omg-payflow-core {
+  border: 1px solid rgba(212, 175, 55, 0.85);
+  background:
+    radial-gradient(circle at 50% 35%, rgba(212, 175, 55, 0.28), transparent 5rem),
+    linear-gradient(145deg, rgba(11, 143, 60, 0.22), rgba(0, 0, 0, 0.96));
+  box-shadow: 0 0 46px rgba(11, 143, 60, 0.55), inset 0 0 18px rgba(212, 175, 55, 0.2);
+}
+
+.omg-module-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.omg-module-hero::after {
+  content: "";
+  position: absolute;
+  right: -5rem;
+  top: -5rem;
+  width: 14rem;
+  height: 14rem;
+  border-radius: 999px;
+  border: 1px solid rgba(212, 175, 55, 0.24);
+  box-shadow: 0 0 55px rgba(11, 143, 60, 0.28);
+}
+
+.omg-icon-orb {
+  background:
+    radial-gradient(circle at 30% 25%, rgba(212, 175, 55, 0.38), transparent 52%),
+    rgba(11, 143, 60, 0.16);
+  box-shadow: 0 0 30px rgba(11, 143, 60, 0.26);
+}
+
+.omg-form-panel {
+  border: 1px solid rgba(212, 175, 55, 0.18);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 246, 244, 0.96));
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.28);
+}
+
+.omg-action-button {
+  min-height: 118px;
+}
+
+.omg-action-button:hover {
+  box-shadow: 0 0 26px rgba(11, 143, 60, 0.22);
+}
+
+.omg-bottom-nav {
+  box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.38);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+input,
+select,
+textarea,
+button {
+  min-width: 0;
+}
+
+.omg-form-panel input,
+.omg-form-panel select,
+.omg-form-panel textarea,
+.omg-form-panel button {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  body {
+    min-width: 0;
+  }
+
+  .omg-shell main {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .omg-module-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .omg-card,
+  .omg-form-panel {
+    border-radius: 14px;
+  }
+
+  .omg-module-card,
+  .omg-action-button {
+    min-height: auto;
+  }
+
+  .omg-module-hero::after {
+    right: -8rem;
+    top: -8rem;
+  }
+
+  .omg-bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .omg-bottom-nav button {
+    font-size: 0.78rem;
+    line-height: 1.15rem;
+    padding-left: 0.2rem;
+    padding-right: 0.2rem;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  .omg-module-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.omg-feature-page {
+  min-height: 100vh;
+  padding: clamp(24px, 5vw, 72px);
+  color: #fff;
+  background:
+    radial-gradient(circle at 85% 10%, rgba(0, 200, 83, 0.16), transparent 28rem),
+    radial-gradient(circle at 10% 90%, rgba(212, 175, 55, 0.13), transparent 24rem),
+    #050505;
+}
+
+.omg-feature-hero {
+  max-width: 780px;
+  margin: 0 auto 32px;
+  text-align: center;
+}
+
+.omg-feature-eyebrow {
+  margin: 0 0 10px;
+  color: #d4af37;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.omg-feature-hero h1 {
+  margin: 0;
+  font-size: clamp(2rem, 6vw, 4.5rem);
+  line-height: 1.05;
+}
+
+.omg-feature-hero > p:last-child {
+  max-width: 640px;
+  margin: 18px auto 0;
+  color: #b8c1bc;
+  font-size: 1.05rem;
+}
+
+.omg-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.omg-feature-card {
+  padding: 22px;
+  border: 1px solid rgba(212, 175, 55, 0.32);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(30, 30, 30, 0.96), rgba(11, 18, 14, 0.96));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+}
+
+.omg-feature-card p {
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
+.omg-feature-dot {
+  display: block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #00c853;
+  box-shadow: 0 0 18px rgba(0, 200, 83, 0.65);
+}
+
+.omg-feature-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  max-width: 1040px;
+  margin: 32px auto 0;
+}
+
+.omg-feature-button,
+.omg-ai-prompt button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  padding: 0 20px;
+  border: 1px solid rgba(212, 175, 55, 0.5);
+  border-radius: 12px;
+  color: #fff;
+  background: #1e1e1e;
+  font-weight: 750;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.omg-feature-button.primary,
+.omg-ai-prompt button {
+  border-color: #00c853;
+  background: #00c853;
+  color: #031208;
+}
+
+.omg-ai-prompt {
+  display: grid;
+  gap: 12px;
+  max-width: 760px;
+  margin: 24px auto 0;
+}
+
+.omg-ai-prompt textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px;
+  border: 1px solid #4a514d;
+  border-radius: 12px;
+  color: #fff;
+  background: #090c0a;
+  resize: vertical;
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="OMG Platforme connecte paiements, commerce, education, sante, immobilier, services publics et fiscalite dans une seule experience mondiale."
+    />
+    <meta name="application-name" content="OMG Platforme" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="OMG Platforme" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/omg-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icons/omg-icon-192.png" />
+    <title>OMG Platforme</title>
+  </head>
+  <body>
+    <div id="root">
+      <div style="min-height:100vh;background:#000;color:#d4af37;display:grid;place-items:center;font-family:Arial,sans-serif;text-align:center;padding:24px">
+        <div>
+          <h1 style="margin:0 0 12px;font-size:34px">OMG Platforme</h1>
+          <p style="margin:0;color:#0b8f3c">Chargement de la plateforme...</p>
+        </div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var path = window.location.pathname.replace(/\\/g, "/").toLowerCase();
+        if (window.location.protocol === "file:" && path.indexOf("/dist/") === -1) {
+          window.location.replace("./dist/index.html#/");
+        }
+      })();
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

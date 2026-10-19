@@ -1,0 +1,58 @@
+{
+  "name": "OMG Platforme - One Million Global Platform",
+  "short_name": "OMG Platforme",
+  "description": "Plateforme mondiale avec 11 modules: Payflow, Mailport, Store, Property, Restaurant, School, City, Health, University, Tax Pro et Administration.",
+  "id": "/",
+  "start_url": "./#/?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "lang": "fr",
+  "dir": "ltr",
+  "categories": ["finance", "business", "education", "productivity"],
+  "icons": [
+    {
+      "src": "./icons/omg-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/omg-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/omg-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Payflow",
+      "short_name": "Payflow",
+      "description": "Ouvrir le module financier Payflow",
+      "url": "./#/payflow",
+      "icons": [{ "src": "./icons/omg-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "University Integration",
+      "short_name": "University",
+      "description": "Ouvrir les cours et concours universitaires",
+      "url": "./#/university-integration",
+      "icons": [{ "src": "./icons/omg-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Platform Administration",
+      "short_name": "Admin",
+      "description": "Ouvrir l'administration centrale",
+      "url": "./#/platform-administration",
+      "icons": [{ "src": "./icons/omg-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

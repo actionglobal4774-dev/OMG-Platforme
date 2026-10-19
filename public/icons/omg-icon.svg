@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="OMG Platforme">
+  <rect width="512" height="512" rx="112" fill="#000000"/>
+  <circle cx="256" cy="256" r="174" fill="none" stroke="#D4AF37" stroke-width="22"/>
+  <circle cx="256" cy="256" r="126" fill="none" stroke="#0B8F3C" stroke-width="14" opacity="0.9"/>
+  <path d="M148 292c32 48 79 72 108 72s76-24 108-72" fill="none" stroke="#D4AF37" stroke-width="24" stroke-linecap="round"/>
+  <path d="M170 224c22-48 55-72 86-72s64 24 86 72" fill="none" stroke="#0B8F3C" stroke-width="24" stroke-linecap="round"/>
+  <text x="256" y="282" text-anchor="middle" font-family="Arial, sans-serif" font-size="86" font-weight="800" fill="#D4AF37">OMG</text>
+  <text x="256" y="335" text-anchor="middle" font-family="Arial, sans-serif" font-size="35" font-weight="700" fill="#0B8F3C">509</text>
+</svg>
