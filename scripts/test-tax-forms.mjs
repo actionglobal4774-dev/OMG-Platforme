@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { canUseTaxFile, validateTaxDraft } from '../src/modules/taxpro/taxFormValidation.js';
+const draft = { taxYear: '2026', state: 'Massachusetts', ssnLast4: '1234', employmentIncome: '100', businessIncome: '0', otherIncome: '0', withholding: '0', deductions: '0', dependents: '0' };
+assert.equal(validateTaxDraft(draft), '');
+for (const change of [{ employmentIncome: 'NaN' }, { businessIncome: '-1' }, { deductions: '' }, { dependents: '1.5' }, { ssnLast4: '123' }, { state: '' }]) assert.ok(validateTaxDraft({ ...draft, ...change }));
+const file = { taxpayer: 'user@test', assignedPreparer: 'pro@test' };
+assert.equal(canUseTaxFile(file, { email: 'user@test', userType: 'Contribuable USA' }), true);
+assert.equal(canUseTaxFile(file, { email: 'other@test', userType: 'Contribuable USA' }), false);
+assert.equal(canUseTaxFile(file, { email: 'pro@test', userType: 'Fiscaliste autorise' }), true);
+assert.equal(canUseTaxFile(file, { email: 'other@test', userType: 'Fiscaliste autorise' }), false);
+console.log('Tax : 11 assertions formulaires et acces reussies.');

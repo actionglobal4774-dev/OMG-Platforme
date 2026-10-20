@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { nextMailportStatus, validateMailportDelivery } from '../src/modules/mailport/mailportJourney.js';
+assert.equal(nextMailportStatus('created'), 'carrier_scanned');
+assert.equal(nextMailportStatus('carrier_scanned'), 'in_transit');
+assert.equal(nextMailportStatus('in_transit'), 'delivered');
+assert.equal(nextMailportStatus('delivered'), null);
+assert.equal(nextMailportStatus('unknown'), null);
+assert.ok(validateMailportDelivery('owner', 'in_transit', '', null));
+assert.ok(validateMailportDelivery('carrier', 'delivered', ' ', {}));
+assert.ok(validateMailportDelivery('carrier', 'delivered', 'Receveur', null));
+assert.equal(validateMailportDelivery('carrier', 'delivered', 'Receveur', {}), '');
+assert.equal(validateMailportDelivery('carrier', 'in_transit', '', null), '');
+console.log('Mailport : 10 assertions de transitions et preuves reussies.');

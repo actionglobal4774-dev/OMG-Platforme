@@ -2,6 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { modules } from "../src/data/modules.js";
 import { getActionsForUserType, getModuleLogic } from "../src/data/moduleLogic.js";
+import assert from "node:assert/strict";
+import { payflowPages, getPayflowActionPath } from "../src/modules/payflow/payflowNavigation.js";
+import { modulePageInventory } from "../src/data/pageInventory.js";
+
+assert.deepEqual(payflowPages.map(([slug]) => slug).sort(), modulePageInventory.find((item) => item.id === "payflow").pages.map(([slug]) => slug).sort());
+assert.equal(new Set(payflowPages.map(([slug]) => slug)).size, payflowPages.length);
+for (const [action, expected] of [
+  ["Envoyer argent", "send"], ["Demander argent", "request"], ["Recevoir paiement", "receive"],
+  ["Depot operateur", "deposit"], ["Retrait operateur", "withdraw"], ["Utiliser QR", "qr-payment"],
+  ["Historique", "transactions"], ["Litige", "dispute"], ["Track transfer", "track-transfer"]
+]) assert.equal(getPayflowActionPath(action), `/payflow/${expected}`);
+assert.equal(getPayflowActionPath("Client service special"), null);
 
 const root = process.cwd();
 const failures = [];
@@ -196,17 +208,8 @@ if (!fs.existsSync(dashboardPath)) {
   if (!dashboard.includes('getModuleById("payflow")')) {
     failures.push("Payflow ne charge pas le bon module.");
   }
-  if (!dashboard.includes("renderCompactAction") || !dashboard.includes("<PayflowQr />")) {
-    failures.push("Le bouton Utiliser son QR n'ouvre pas le vrai composant QR Payflow.");
-  }
-  if (!dashboard.includes("SendMoney") || !dashboard.includes("<SendMoney />")) {
-    failures.push("Le bouton Envoyer n'ouvre pas le vrai formulaire d'envoi Payflow.");
-  }
-  if (!dashboard.includes("RequestMoney") || !dashboard.includes("<RequestMoney />")) {
-    failures.push("Le bouton Demander n'ouvre pas le vrai formulaire de demande Payflow.");
-  }
-  if (!dashboard.includes("ReceiveMoney") || !dashboard.includes("<ReceiveMoney />")) {
-    failures.push("Le bouton Recevoir n'ouvre pas le vrai formulaire de reception Payflow.");
+  if (!dashboard.includes("renderCompactAction") || !dashboard.includes("getPayflowActionPath") || !dashboard.includes("<Navigate to={canonicalPath}")) {
+    failures.push("Les actions Payflow ne rejoignent pas les pages canoniques.");
   }
   if (!dashboard.includes("PayflowSpecialServices") || !dashboard.includes("<PayflowSpecialServices />")) {
     failures.push("Le bouton Client service special n'ouvre pas la page Changer pays/devise Payflow.");
@@ -239,7 +242,8 @@ if (!fs.existsSync(sendMoneyPath)) {
     "deliveryDelay",
     "getPayflowDeliveryDelay",
     "payflow_delivery_delay",
-    "Finaliser la transaction"
+    "PayflowReview",
+    "PayflowOutcome"
   ];
 
   for (const part of requiredInternationalBankParts) {
@@ -253,7 +257,7 @@ if (!fs.existsSync(requestMoneyPath)) {
   failures.push("Le formulaire Demander argent Payflow est absent.");
 } else {
   const requestMoney = fs.readFileSync(requestMoneyPath, "utf8");
-  for (const part of ["payflow_payer_required", "payflow_request_confirmation_required", "payflow_create_request_now", "payflow_payment_request_created", "payflow_request_delay"]) {
+  for (const part of ["payflow_payer_required", "payflow_request_confirmation_required", "PayflowReview", "PayflowOutcome", "payflow_payment_request_created", "payflow_request_delay"]) {
     if (!requestMoney.includes(part)) {
       failures.push(`Demander argent Payflow incomplet: ${part}`);
     }
@@ -374,4 +378,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log("OK: Payflow page 1 -> page 2 -> page 3 -> confirmation/historique + retour valides pour carte bancaire et operateur Payflow.");
+console.log("OK: controles statiques Payflow et correspondance des actions vers les 15 pages. Recette navigateur et transactions reelles non couvertes par ce script.");

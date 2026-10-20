@@ -1,4 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { isDemoMode } from "../../services/runtimePolicy";
+import { ownsStoreProduct, validStoreQuote, validateStoreCart } from "./storeJourney";
+import { validateStoreAddress, validateStorePhoto, validateStoreProduct } from "./storeFormValidation";
 import {
   addToCart,
   generateReceipt,
@@ -46,30 +50,34 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
   const mode = getMode(selectedAction);
   const [products, setProducts] = useState(() => {
     const saved = getCollection("store_products");
-    return saved.length ? saved : starterProducts;
+    return saved.length ? saved : isDemoMode ? starterProducts : [];
   });
   const [cart, setCart] = useState(() => getCollection("cart"));
   const [shop, setShop] = useState({ name: "", category: "", city: "", payout: "Payflow" });
   const [product, setProduct] = useState({ name: "", category: "", price: "", stock: "", description: "" });
   const [photo, setPhoto] = useState({ productId: "", fileName: "" });
-  const [address, setAddress] = useState(() => getCollection("store_addresses")[0] || { reference: "", recipient: "", instructions: "" });
+  const [address, setAddress] = useState(() => getCollection("store_addresses").find((item) => item.owner === profile?.email) || { reference: "", recipient: "", instructions: "" });
   const [payment, setPayment] = useState({ method: "payflow", confirmed: false });
   const [processing, setProcessing] = useState(false);
   const [notice, setNotice] = useState("");
   const [reference, setReference] = useState("");
+  const [photoFile, setPhotoFile] = useState(null);
+  const shops = getCollection("store_shops");
+  const [review, setReview] = useState(null);
+  const pending = useRef(false);
 
   const cartTotal = useMemo(
     () => cart.reduce((total, item) => total + Number(item.price || 0) * Number(item.quantity || 0), 0),
     [cart]
   );
-  const orders = getCollection("store_orders");
+  const orders = getCollection("store_orders").filter((item) => item.customer === profile?.email);
   const sales = getCollection("payments").filter((item) => normalize(item.label).includes("store"));
 
-  const complete = (action, nextReference, message) => {
+  const complete = (action, nextReference, message, status = "prepared") => {
     saveModuleActivity("store", {
       action,
       reference: nextReference,
-      status: "confirmed",
+      status,
       profile: { email: profile?.email, userType: profile?.userType, country: profile?.country }
     });
     setReference(nextReference);
@@ -77,17 +85,20 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const addProductToCart = (item) => {
+    if ((cart.find((entry) => entry.id === item.id)?.quantity || 0) >= Number(item.stock)) { setNotice("Stock maximum atteint."); return; }
     const result = addToCart(item, 1);
     setCart(result.data);
     setNotice(`${item.name} ajoute au panier.`);
   };
 
   const changeQuantity = (id, quantity) => {
+    if (quantity > Number(products.find((item) => item.id === id)?.stock || 0)) { setNotice("Quantite superieure au stock disponible."); return; }
     const result = updateCartQuantity(id, quantity);
     if (result.ok) setCart(result.data);
   };
 
   const saveShop = () => {
+    if (shops.some((item) => item.owner === profile?.email && normalize(item.name).trim() === normalize(shop.name).trim() && normalize(item.city).trim() === normalize(shop.city).trim())) { setNotice("Cette boutique existe deja pour ce compte et cette ville."); return; }
     if (!shop.name.trim() || !shop.category.trim() || !shop.city.trim()) {
       setNotice("Nom de boutique, categorie et ville sont obligatoires.");
       return;
@@ -97,6 +108,8 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const saveProduct = () => {
+    const validation = validateStoreProduct(product, shops, profile?.email);
+    if (validation) { setNotice(validation); return; }
     const price = Number(product.price);
     const stock = Number(product.stock);
     if (!product.name.trim() || !product.category.trim() || !Number.isFinite(price) || price <= 0 || !Number.isInteger(stock) || stock < 0) {
@@ -111,6 +124,9 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const savePhoto = () => {
+    const validation = validateStorePhoto(photoFile);
+    if (validation) { setNotice(validation); return; }
+    if (!ownsStoreProduct(products.find((item) => item.id === photo.productId), profile?.email)) { setNotice("Choisissez votre propre produit."); return; }
     if (!photo.productId || !photo.fileName) {
       setNotice("Choisissez un produit et une photo.");
       return;
@@ -118,10 +134,12 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
     const next = products.map((item) => item.id === photo.productId ? { ...item, photoName: photo.fileName } : item);
     setProducts(next);
     saveCollection("store_products", next);
-    complete("Ajouter photo produit", createReference("STORE-PHOTO"), "Photo rattachee au produit.");
+    complete("Ajouter photo produit", createReference("STORE-PHOTO"), "Nom du fichier conserve localement. Aucune photo televersee.");
   };
 
   const saveAddress = () => {
+    const validation = validateStoreAddress(address);
+    if (validation) { setNotice(validation); return; }
     if (!address.reference.trim() || !address.recipient.trim()) {
       setNotice("Reference Mailport et nom du destinataire sont obligatoires.");
       return;
@@ -130,8 +148,13 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
     complete("Choisir adresse", result.data.id, "Adresse Mailport enregistree pour la commande.");
   };
 
-  const checkout = async () => {
+  const checkout = async (confirmed = false) => {
+    if (pending.current) return;
     setNotice("");
+    const addressError = validateStoreAddress(address);
+    if (addressError) { setNotice(addressError); return; }
+    const validation = validateStoreCart(cart, products);
+    if (validation) { setNotice(validation); return; }
     if (!cart.length) {
       setNotice("Le panier est vide.");
       return;
@@ -145,21 +168,26 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
       return;
     }
     setProcessing(true);
+    pending.current = true;
     try {
-      const order = await createSecureStoreOrder({
+      const order = confirmed ? review : await createSecureStoreOrder({
         items: cart.map((item) => ({ productId: item.id, quantity: item.quantity })),
         paymentMethod: payment.method,
         mailportPurchaseId: address.reference.trim(),
         recipientName: address.recipient.trim(),
         deliveryInstructions: address.instructions.trim()
       });
+      if (!validStoreQuote(order)) throw new Error("Le serveur n'a pas fourni un devis de commande valide.");
+      if (!confirmed) { setReview(order); return; }
       if (payment.method === "payflow") {
         const result = await completeSecureStoreOrderWithPayflow(order.orderId);
         const localOrder = upsertItem("store_orders", { id: result.orderId, items: cart, total: result.total, status: result.status, packageId: result.packageId, mailportStatus: result.mailportStatus, customer: profile?.email });
         generateReceipt({ id: result.orderId, amount: result.total, currency: result.currency, label: "Store Online", method: "Payflow" });
         saveCollection("cart", []);
         setCart([]);
-        complete("Payer commande", localOrder.data.id, "Commande payee avec Payflow. Le colis Mailport a ete cree.");
+        setReview(null);
+        setPayment((current) => ({ ...current, confirmed: false }));
+        complete("Payer commande", localOrder.data.id, "Commande payee avec Payflow. Le colis Mailport a ete cree.", "confirmed");
         return;
       }
       const baseUrl = `${window.location.origin}${window.location.pathname}`;
@@ -178,11 +206,13 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
     } catch (error) {
       setNotice(error?.message || "La commande Store n'a pas pu etre preparee.");
     } finally {
+      pending.current = false;
       setProcessing(false);
     }
   };
 
   const updateStock = (id, value) => {
+    if (!ownsStoreProduct(products.find((item) => item.id === id), profile?.email)) { setNotice("Vous ne pouvez modifier que vos propres produits."); return; }
     const stock = Number(value);
     if (!Number.isInteger(stock) || stock < 0) return;
     const next = products.map((item) => item.id === id ? { ...item, stock } : item);
@@ -190,8 +220,11 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
     saveCollection("store_products", next);
   };
 
+  if (review) return <section className="mt-5 space-y-4 rounded-2xl border bg-white p-5"><h3 className="text-xl font-bold">Confirmer le total serveur</h3><p>Commande {review.orderId}</p><p>Marchandises : {review.merchandiseAmount} USD · Livraison : {review.deliveryFee.toFixed(2)} USD</p><p className="font-bold">Total : {review.total.toFixed(2)} USD</p><p>Destinataire : {address.recipient} · Achat Mailport : {address.reference}</p><p>Moyen : {payment.method}. La confirmation peut debiter Payflow ou ouvrir le prestataire externe.</p><button disabled={processing} onClick={() => checkout(true)} className="rounded bg-omgGreen p-3 text-white">{processing ? "Traitement…" : "Confirmer le paiement"}</button><button disabled={processing} onClick={() => { setReview(null); setPayment((current) => ({ ...current, confirmed: false })); }} className="ml-3 rounded border p-3">Retour sans payer</button><p className="text-sm">Une commande en attente reste creee sur le serveur. En cas de reponse perdue, verifiez son statut avant toute nouvelle tentative.</p>{notice && <p role="alert">{notice}</p>}</section>;
+
   return (
     <div className="mt-5 space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 text-amber-900">Catalogue et modifications locaux : publication et stock restent a verifier sur le serveur. Seule une reponse du service de paiement confirme un achat.</p>
       {mode === "catalog" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-lg font-black text-slate-900">Produits Store</h3>
@@ -226,6 +259,7 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
 
       {mode === "product" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
+          <label className="block">Boutique du produit<select aria-label="Boutique du produit" className="mt-2 w-full rounded border p-3" value={product.shopId || ""} onChange={(event) => setProduct({ ...product, shopId: event.target.value })}><option value="">Choisir ma boutique</option>{shops.filter((item) => item.owner === profile?.email).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <h3 className="text-lg font-black text-slate-900">Ajouter un produit</h3>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <input className="rounded border p-3" placeholder="Nom du produit" value={product.name} onChange={(e) => setProduct({ ...product, name: e.target.value })} />
@@ -247,7 +281,7 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
           </select>
           <label className="mt-3 block rounded border border-dashed p-3 text-slate-700">
             {photo.fileName || "Choisir une photo"}
-            <input type="file" accept="image/*" className="sr-only" onChange={(e) => setPhoto({ ...photo, fileName: e.target.files?.[0]?.name || "" })} />
+            <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(e) => { setPhotoFile(e.target.files?.[0] || null); setPhoto({ ...photo, fileName: e.target.files?.[0]?.name || "" }); }} />
           </label>
           <button type="button" onClick={savePhoto} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer la photo</button>
         </section>
@@ -270,6 +304,7 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
       {mode === "address" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-lg font-black text-slate-900">Adresse de livraison Mailport</h3>
+          <p className="mt-2 text-sm">Numero d'achat Mailport uniquement, pas le contenu confidentiel du QR. Le serveur verifiera la propriete et la validite avant commande.</p>
           <div className="mt-4 grid gap-3">
             <input className="rounded border p-3" placeholder="Reference ou QR Mailport" value={address.reference} onChange={(e) => setAddress({ ...address, reference: e.target.value })} />
             <input className="rounded border p-3" placeholder="Nom du destinataire" value={address.recipient} onChange={(e) => setAddress({ ...address, recipient: e.target.value })} />
@@ -300,7 +335,8 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
             <input type="checkbox" checked={payment.confirmed} onChange={(e) => setPayment({ ...payment, confirmed: e.target.checked })} />
             <span>Je confirme le panier, le total et le paiement.</span>
           </label>
-          <button type="button" disabled={processing} onClick={checkout} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:opacity-60">{processing ? "Preparation securisee..." : "Payer la commande"}</button>
+          <Link to="/store/checkout?task=Choisir%20adresse" className="mt-3 block font-bold text-omgGreen">Choisir ou modifier l'adresse Mailport</Link>
+          <button type="button" disabled={processing} onClick={() => checkout()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:opacity-60">{processing ? "Preparation securisee..." : "Obtenir le total serveur avant paiement"}</button>
         </section>
       )}
 
@@ -311,6 +347,7 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
             {orders.length ? orders.map((item) => (
               <div key={item.id} className="rounded-xl bg-slate-50 p-4 text-slate-700">
                 <strong>{item.id}</strong> · {item.status} · Mailport : {item.mailportStatus}
+                {item.packageId && <Link to={`/mailport/tracking?reference=${encodeURIComponent(item.packageId)}`} className="mt-2 block font-bold text-omgGreen">Suivre le colis Mailport</Link>}
               </div>
             )) : <div className="rounded-xl bg-slate-50 p-4 text-slate-600">Aucune commande pour le moment.</div>}
           </div>
@@ -320,14 +357,14 @@ function StoreWorkspace({ selectedAction, profile, closeModuleAction }) {
       {mode === "sales" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-lg font-black text-slate-900">Ventes Store</h3>
-          <div className="mt-4 text-3xl font-black text-omgGreen">{sales.reduce((sum, item) => sum + Number(item.amount || 0), 0).toFixed(2)} USD</div>
+          <p className="mt-4 text-slate-700">Historique local non rapproche avec les versements vendeur. Aucun total de revenus reels verifie.</p>
           <div className="mt-4 space-y-3">
             {sales.length ? sales.map((item) => <div key={item.id} className="rounded-xl bg-slate-50 p-3 text-slate-700">{item.id} · {item.amount} {item.currency}</div>) : <div className="rounded-xl bg-slate-50 p-4 text-slate-600">Aucune vente enregistree.</div>}
           </div>
         </section>
       )}
 
-      {notice && <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-900">{notice}{reference && <div className="mt-2">Reference : {reference}</div>}</div>}
+      {notice && <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-900">{notice}{reference && <div className="mt-2">Reference : {reference}</div>}{mode === "address" && <Link to="/store/checkout" className="mt-3 block underline">Continuer vers le paiement</Link>}{mode === "checkout" && reference && <Link to="/store/orders" className="mt-3 block underline">Voir mes commandes</Link>}</div>}
       <button type="button" onClick={closeModuleAction} className="rounded border border-slate-300 px-5 py-3 font-bold text-slate-700">Retour au menu</button>
     </div>
   );
@@ -337,7 +374,7 @@ export default StoreWorkspace;
 
 export function StorePublicCatalog({ onCreateProfile }) {
   const savedProducts = getCollection("store_products");
-  const products = savedProducts.length ? savedProducts : starterProducts;
+  const products = savedProducts.length ? savedProducts : isDemoMode ? starterProducts : [];
 
   return (
     <section className="mt-6 rounded-2xl border border-white/10 bg-zinc-950 p-5">

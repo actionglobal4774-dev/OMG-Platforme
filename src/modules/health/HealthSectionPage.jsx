@@ -1,5 +1,6 @@
 import React from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { getSectionTask, getModuleActionDestination } from "../../data/moduleNavigation";
 import { FaBell, FaClipboardList, FaFlask, FaLock, FaNotesMedical, FaPills, FaShieldAlt, FaUserMd, FaXRay } from "react-icons/fa";
 import DashboardLayout from "../../components/layout/DashboardLayout";
 import { useAuth } from "../../context/AuthContext";
@@ -38,18 +39,25 @@ const navGroups = [
 
 export default function HealthSectionPage() {
   const { section } = useParams();
+  const [search] = useSearchParams();
   const navigate = useNavigate();
   const { getModuleProfile } = useAuth();
   const match = findModulePage("health", section);
   const profile = getModuleProfile("health");
 
   if (!match) return <Navigate to="/not-found" replace />;
-  if (redirects[section]) return <Navigate to={`/health-care/${redirects[section]}`} replace />;
+  if (section === "provider-dashboard" && profile) {
+    const firstAction = getActionsForUserType("health", profile.userType, [])[0];
+    return <Navigate to={getModuleActionDestination("health", firstAction) || "/health-care"} replace />;
+  }
+  if (redirects[section]) return <Navigate to={`/health-care/${redirects[section]}${search.toString() ? `?${search.toString()}` : ""}`} replace />;
 
   const [, title, description] = match.page;
-  const pages = match.module.pages.filter(([slug]) => !redirects[slug]);
-  const action = pageActions[section];
-  const authorized = profile && getActionsForUserType("health", profile.userType, []).includes(action);
+  const roleActions = profile ? getActionsForUserType("health", profile.userType, []) : [];
+  const action = search.get("task") ? getSectionTask("health", section, search.get("task"), profile?.userType) : getSectionTask("health", section, "", profile?.userType) || pageActions[section];
+  const authorized = profile && (roleActions.includes(action) || (["appointments", "payment"].includes(section) && !search.get("task") && roleActions.includes("Rendez-vous")));
+  const canOpen = (slug) => Boolean(getSectionTask("health", slug, "", profile?.userType)) || (["appointments", "payment"].includes(slug) && roleActions.includes("Rendez-vous"));
+  const pages = match.module.pages.filter(([slug]) => !redirects[slug] && canOpen(slug));
 
   return (
     <DashboardLayout>
@@ -62,7 +70,7 @@ export default function HealthSectionPage() {
             </Link>
             <p className="mt-5 px-2 text-xs font-bold uppercase tracking-[0.16em] text-emerald-100/55">{profile?.userType || "Accès sécurisé"}</p>
             <nav aria-label="Navigation Health Care" className="mt-3 space-y-5">
-              {navGroups.map((group) => <div key={group.label}><p className="px-2 text-[11px] font-bold uppercase tracking-wider text-emerald-100/45">{group.label}</p><div className="mt-2 space-y-1">{group.items.map(([slug, label, Icon]) => <Link key={slug} to={`/health-care/${slug}`} aria-current={slug === section ? "page" : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${slug === section ? "bg-emerald-500 text-white shadow" : "text-emerald-50/85 hover:bg-white/10"}`}><Icon className="text-base" />{label}</Link>)}</div></div>)}
+              {navGroups.map((group) => <div key={group.label}><p className="px-2 text-[11px] font-bold uppercase tracking-wider text-emerald-100/45">{group.label}</p><div className="mt-2 space-y-1">{group.items.filter(([slug]) => canOpen(slug)).map(([slug, label, Icon]) => <Link key={slug} to={`/health-care/${slug}`} aria-current={slug === section ? "page" : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${slug === section ? "bg-emerald-500 text-white shadow" : "text-emerald-50/85 hover:bg-white/10"}`}><Icon className="text-base" />{label}</Link>)}</div></div>)}
             </nav>
             <Link to="/health-care/emergency-access" className="mt-6 flex items-center gap-3 rounded-xl border border-red-200/35 bg-red-950/40 px-3 py-3 text-sm font-bold text-red-100"><FaBell />Accès urgence</Link>
           </aside>
@@ -90,7 +98,7 @@ export default function HealthSectionPage() {
             <Link to="/health-care" className="mt-4 inline-block rounded bg-slate-900 px-5 py-3 font-bold text-white">Retour aux services autorisés</Link>
           </section>
         ) : (
-          <HealthWorkspace selectedAction={action} profile={profile} closeModuleAction={() => navigate("/health-care")} />
+          <><nav aria-label="Actions de mon rôle santé" className="mb-4 flex flex-wrap gap-2">{roleActions.map((item) => <Link key={item} className="rounded border bg-white px-3 py-2 text-sm text-emerald-800" to={getModuleActionDestination("health", item)}>{item}</Link>)}</nav><HealthWorkspace key={`${section}/${search.toString()}`} initialReference={search.get("reference") || ""} selectedAction={action} profile={profile} closeModuleAction={() => navigate("/health-care")} /></>
         )}
             </div>
           </div>

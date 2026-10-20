@@ -1,4 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { isDemoMode } from "../../services/runtimePolicy";
+import { allUniversityChaptersPassed, universityAnswersComplete, validateUniversityEnrollment } from "./universityJourney";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { findModulePage } from "../../data/pageInventory";
+import ModuleActionDestination from "../../components/modules/ModuleActionDestination";
 import { useTranslation } from "react-i18next";
 import ModuleDashboardTemplate from "../../components/modules/ModuleDashboardTemplate";
 import { getModuleById } from "../../data/modules";
@@ -430,6 +435,12 @@ function UniversityLoading() {
 }
 
 function UniversityDashboardContent({ catalogApi }) {
+  const { section } = useParams();
+  const navigate = useNavigate();
+  const currentPage = section ? findModulePage("university", section) : null;
+  const overview = !section || ["student", "parent"].includes(section);
+  const showAdmission = overview || ["faculties", "map", "payment"].includes(section);
+  const showCourses = overview || ["progress", "ai-tutor"].includes(section);
   const { t, i18n } = useTranslation();
   const { getCountryByCode, getSubjectsForFaculties, universityCatalog } = catalogApi;
   const universityCountryOptions = useMemo(() => buildUniversityCountryOptions(universityCatalog), [universityCatalog]);
@@ -443,6 +454,9 @@ function UniversityDashboardContent({ catalogApi }) {
   const [savedPaymentMethods] = useState(() => getUniversitySavedPaymentMethods());
   const [paymentStatus, setPaymentStatus] = useState(null);
   const [isPaying, setIsPaying] = useState(false);
+  const paymentPending = useRef(false);
+  const [paymentReviewed, setPaymentReviewed] = useState(false);
+  useEffect(() => { setPaymentReviewed(false); }, [countryCode, selectedFaculties, studentEmail, payerEmail, paymentMethod]);
   const [activeSubject, setActiveSubject] = useState("");
   const [savedProgress] = useState(() => getSavedUniversityProgress());
   const [activeChapterBySubject, setActiveChapterBySubject] = useState(savedProgress.activeChapterBySubject);
@@ -476,7 +490,7 @@ function UniversityDashboardContent({ catalogApi }) {
   const paymentAmount = Number((selectedFacultyCount * UNIVERSITY_FACULTY_PRICE_USD).toFixed(2));
   const selectedSavedPaymentMethod = savedPaymentMethods.find((method) => method.id === paymentMethod);
   const passedChapterCount = Object.values(activeChapterScores).filter((score) => score >= UNIVERSITY_CHAPTER_PASS_SCORE).length;
-  const finalExamReady = Boolean(currentSubject?.chapters?.length) && passedChapterCount >= currentSubject.chapters.length;
+  const finalExamReady = allUniversityChaptersPassed(currentSubject?.chapters, activeChapterScores, UNIVERSITY_CHAPTER_PASS_SCORE);
   const currentFinalExamResult = finalExamResults[currentSubjectId] || null;
   const finalExamQuestions = useMemo(() => {
     if (!questionBank || !currentSubject?.chapters?.length) return [];
@@ -612,6 +626,10 @@ function UniversityDashboardContent({ catalogApi }) {
     }
   };
   const confirmPayment = async () => {
+    const validation = validateUniversityEnrollment(selectedFaculties, country.faculties.map((faculty) => faculty.id), studentEmail, payerEmail);
+    if (validation) { setTestResult({ type: "warning", message: validation }); return; }
+    if (!paymentReviewed) { setPaymentReviewed(true); setPaymentStatus({ type: "warning", message: `Verifiez : ${selectedFacultyNames.join(", ")} — ${paymentAmount.toFixed(2)} USD — etudiant ${studentEmail}. Cliquez de nouveau pour preparer la demande. Ce parcours ne confirme aucun debit.` }); return; }
+    if (paymentPending.current) return;
     if (!selectedFaculties.length) {
       setTestResult({ type: "warning", message: t("university_select_faculty_first") });
       return;
@@ -622,6 +640,7 @@ function UniversityDashboardContent({ catalogApi }) {
     }
     if (isPaying) return;
     setIsPaying(true);
+    paymentPending.current = true;
     setPaymentStatus(null);
 
     const paymentPayload = {
@@ -632,7 +651,7 @@ function UniversityDashboardContent({ catalogApi }) {
       unitPriceUsd: UNIVERSITY_FACULTY_PRICE_USD,
       amountUsd: paymentAmount,
       paymentMethod: selectedSavedPaymentMethod?.label || paymentMethod,
-      savedPaymentMethod: selectedSavedPaymentMethod || null,
+      savedPaymentMethodId: selectedSavedPaymentMethod?.id || null,
       payerEmail,
       studentEmail
     };
@@ -654,7 +673,7 @@ function UniversityDashboardContent({ catalogApi }) {
       const activity = saveModuleActivity("university", {
         action: "Paiement session University Integration",
         reference: result.data?.reference || `OMG-UNIVERSITY-${Date.now()}`,
-        status: result.live ? "confirmed" : "prepared",
+        status: "prepared",
         amount: paymentAmount,
         paymentMethod: selectedSavedPaymentMethod?.label || paymentMethod,
         profile: {
@@ -665,15 +684,15 @@ function UniversityDashboardContent({ catalogApi }) {
         }
       });
       completedActivity = activity;
-      await notifyModuleUser("university", "University Integration - paiement", t("university_payment_confirmed"), {
+      await notifyModuleUser("university", "University Integration - demande", "Demande preparee, paiement non confirme.", {
         reference: activity.reference,
         amount: paymentAmount,
         paymentMethod: selectedSavedPaymentMethod?.label || paymentMethod
       }).catch(() => null);
       setPaymentStatus({
-        type: "success",
+        type: "warning",
         reference: activity.reference,
-        message: `${t("university_payment_confirmed")} ${t("reference", { defaultValue: "Reference" })}: ${activity.reference}`
+        message: `Demande preparee uniquement. Aucun paiement confirme. Reference : ${activity.reference}`
       });
     } catch {
       const activity = saveModuleActivity("university", {
@@ -691,9 +710,9 @@ function UniversityDashboardContent({ catalogApi }) {
       });
       completedActivity = activity;
       setPaymentStatus({
-        type: "success",
+        type: "warning",
         reference: activity.reference,
-        message: `${t("university_payment_prepared", { defaultValue: "Paiement prepare. Les cours sont debloques pour continuer le test utilisateur." })} ${t("reference", { defaultValue: "Reference" })}: ${activity.reference}`
+        message: `Service indisponible : brouillon local uniquement, aucun paiement confirme. Reference : ${activity.reference}`
       });
     }
 
@@ -708,7 +727,7 @@ function UniversityDashboardContent({ catalogApi }) {
           countryCode,
           facultyIds: selectedFaculties,
           faculties: selectedFacultyNames,
-          status: "active",
+          status: "requested",
           durationMonths: 3,
           createdAt: persistedAt
         }),
@@ -724,9 +743,11 @@ function UniversityDashboardContent({ catalogApi }) {
       ]).catch(() => null);
     }
 
-    setPaid(true);
+    setPaid(isDemoMode);
     setActiveSubject(subjects[0]?.id || "");
-    setTestResult({ type: "success", message: t("university_payment_confirmed") });
+    setTestResult({ type: "warning", message: isDemoMode ? "Acces de demonstration uniquement : aucun paiement ni inscription universitaire confirmes." : "Demande preparee. Les cours restent verrouilles sans droit d'acces verifie par le serveur." });
+    paymentPending.current = false;
+    setPaymentReviewed(false);
     setIsPaying(false);
   };
 
@@ -735,6 +756,8 @@ function UniversityDashboardContent({ catalogApi }) {
   };
 
   const submitChapterTest = () => {
+    if (!paid || !activeUnlockedChapters[activeChapterIndex]) return;
+    if (!universityAnswersComplete(chapterQuestions, answers)) { setTestResult({ type: "warning", message: "Repondez a toutes les questions avant de soumettre le test." }); return; }
     const total = chapterQuestions.length;
     if (!total) {
       setTestResult({ type: "warning", message: t("university_questions_loading", { defaultValue: "Les questions se chargent. Veuillez reessayer dans quelques secondes." }) });
@@ -799,8 +822,9 @@ function UniversityDashboardContent({ catalogApi }) {
   };
 
   const submitFinalExam = () => {
+    if (!paid || !finalExamReady || finalExamSubject !== currentSubjectId) return;
     const subjectAnswers = finalExamAnswers[currentSubjectId] || {};
-    if (!finalExamQuestions.length || finalExamQuestions.some((question) => subjectAnswers[question.id] === undefined)) {
+    if (!universityAnswersComplete(finalExamQuestions, subjectAnswers)) {
       setTestResult({
         type: "warning",
         message: t("university_final_exam_answer_all", {
@@ -837,6 +861,11 @@ function UniversityDashboardContent({ catalogApi }) {
   };
 
   const openActionTarget = (actionKey) => {
+    const destinations = { university_choose_country: "map", university_country_faculties: "faculties", university_session_payment: "payment", university_courses_by_subject: "progress", university_chapter_test: "progress", university_fred_pedagogy: "ai-tutor" };
+    if (destinations[actionKey] && section !== destinations[actionKey]) {
+      navigate(`/university-integration/${destinations[actionKey]}`);
+      return;
+    }
     const target = document.getElementById(actionTargets[actionKey]);
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -849,7 +878,11 @@ function UniversityDashboardContent({ catalogApi }) {
       compactMenu
       menuActions={getModuleById("university").actions}
       assistantContext={fredUniversityContext}
+      suppressCompactActionFooter
+      renderCompactAction={({ selectedAction, closeModuleAction }) => <ModuleActionDestination moduleId="university" action={selectedAction} onNavigate={closeModuleAction} />}
     >
+      <header className="mt-5 rounded-xl border p-4"><h2 className="text-2xl font-black text-omgGold">{currentPage?.page[1] || "University Integration"}</h2><nav aria-label="Navigation University Integration" className="mt-4 flex gap-2 overflow-x-auto">{(currentPage?.module || findModulePage("university", "student")?.module).pages.map(([slug, label]) => <Link key={slug} to={`/university-integration/${slug}`} aria-current={slug === section ? "page" : undefined} className="shrink-0 rounded border px-3 py-2 text-sm">{label}</Link>)}</nav><Link to="/university-integration" className="mt-4 inline-block font-bold text-omgGreen">Retour au menu University</Link></header>
+      {section === "ai-tutor" && <section className="mt-5 rounded-xl bg-white p-5 text-slate-800"><h2 className="text-xl font-black">Accompagnement pédagogique</h2><p className="mt-2">Sélectionnez une matière et un chapitre ci-dessous ; Fred 509 utilise le contexte du cours actif.</p><Link to="/university-integration/progress" className="mt-3 inline-block text-omgGreen">Voir ma progression</Link></section>}
       <section className="mt-6 grid gap-4 md:grid-cols-3">
         {universityActions.map((item) => (
           <button
@@ -882,9 +915,9 @@ function UniversityDashboardContent({ catalogApi }) {
         </div>
       </section>
 
-      <section className="mt-6 rounded-2xl bg-white p-5 text-black">
+      <section hidden={!showAdmission} className="mt-6 rounded-2xl bg-white p-5 text-black">
         <div className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
-          <div>
+          <div hidden={section === "payment"}>
             <h2 className="text-2xl font-bold text-slate-900">{t("university_admission_path")}</h2>
             <p className="mt-2 text-sm text-slate-600">{t("university_admission_description")}</p>
 
@@ -931,7 +964,8 @@ function UniversityDashboardContent({ catalogApi }) {
             </div>
           </div>
 
-          <div id="university-payment" className="rounded-xl border border-slate-200 p-4">
+          <div hidden={!overview && section !== "payment"} id="university-payment" className="rounded-xl border border-slate-200 p-4">
+            {section === "payment" && <Link to="/university-integration/faculties" className="mb-3 inline-block font-bold text-omgGreen">Choisir ou modifier mes facultés</Link>}
             <h3 className="text-xl font-bold">{t("university_access_payment")}</h3>
             <p className="mt-2 text-sm text-slate-600">{t("university_parent_payment_note")}</p>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -976,13 +1010,14 @@ function UniversityDashboardContent({ catalogApi }) {
               </div>
             )}
             <button type="button" onClick={confirmPayment} disabled={isPaying} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:opacity-60">
-              {isPaying ? t("loading", { defaultValue: "Chargement..." }) : t("university_pay_unlock")}
+              {isPaying ? t("loading", { defaultValue: "Chargement..." }) : paymentReviewed ? "Confirmer la demande (pas un paiement)" : "Verifier la demande"}
             </button>
+            <p className="mt-3 text-sm text-amber-900">Aucun paiement ni inscription officielle verifies par ce formulaire. {isDemoMode ? "Les cours sont accessibles en demonstration seulement." : "L'acces payant exige une integration de paiement verifiee, encore a terminer."}</p>
           </div>
         </div>
       </section>
 
-      {currentSubject && (
+      {currentSubject && showCourses && (
         <section className="mt-6 grid gap-4 lg:grid-cols-[280px_1fr]">
           <aside id="university-courses" className="omg-card rounded-xl p-4">
             <h3 className="font-bold text-omgGold">{t("university_courses_by_subject")}</h3>
@@ -1213,6 +1248,7 @@ function UniversityDashboardContent({ catalogApi }) {
 }
 
 function UniversityDashboard() {
+  const { section } = useParams();
   const [catalogApi, setCatalogApi] = useState(null);
 
   useEffect(() => {
@@ -1224,6 +1260,10 @@ function UniversityDashboard() {
       mounted = false;
     };
   }, []);
+
+  if (section && !findModulePage("university", section)) {
+    return <Navigate to="/not-found" replace />;
+  }
 
   if (!catalogApi) {
     return <UniversityLoading />;

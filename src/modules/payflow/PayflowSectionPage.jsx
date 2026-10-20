@@ -1,5 +1,7 @@
 import React, { useState } from "react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
+import { payflowPages } from "./payflowNavigation";
 import DashboardLayout from "../../components/layout/DashboardLayout";
 import OperatorCash from "./OperatorCash";
 import PaymentMethods from "./PaymentMethods";
@@ -11,30 +13,7 @@ import SendMoney from "./SendMoney";
 import Transactions from "./Transactions";
 import Wallet from "./Wallet";
 
-const sectionTitles = {
-  wallet: "Portefeuille Payflow",
-  send: "Envoyer de l'argent",
-  request: "Demander de l'argent",
-  receive: "Recevoir de l'argent",
-  deposit: "Depot operateur",
-  withdraw: "Retrait operateur",
-  exchange: "Changer de pays et de devise",
-  transactions: "Historique des transactions",
-  "qr-payment": "Paiement QR Payflow",
-  operators: "Operateurs Payflow",
-  verification: "Verification du compte",
-  "payment-methods": "Moyens de paiement",
-  settings: "Parametres Payflow",
-  dispute: "Ouvrir un litige Payflow",
-  "track-transfer": "Suivre un transfert Payflow"
-};
-
-const payflowNavigation = [
-  ["wallet", "Wallet"], ["send", "Envoyer"], ["request", "Demander"], ["receive", "Recevoir"],
-  ["deposit", "Depot"], ["withdraw", "Retrait"], ["exchange", "Devise"], ["transactions", "Transactions"],
-  ["qr-payment", "QR"], ["operators", "Operateurs"], ["verification", "Verification"],
-  ["payment-methods", "Paiements"], ["settings", "Parametres"], ["dispute", "Litige"], ["track-transfer", "Suivi"]
-];
+const sectionTitles = Object.fromEntries(payflowPages.map(([slug, title]) => [slug, title]));
 
 function OperatorsDirectory() {
   const operators = [
@@ -44,11 +23,11 @@ function OperatorsDirectory() {
   ];
   return (
     <div className="omg-card mt-6 rounded-xl p-5">
-      <p className="text-sm text-gray-300">Choisissez uniquement un operateur verifie. La geolocalisation reelle necessitera une API cartographique.</p>
+      <p className="text-sm text-gray-300">Annuaire de démonstration. La disponibilité et la vérification réelles des opérateurs restent à connecter.</p>
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         {operators.map(([id, city, services]) => <article key={id} className="rounded-xl border border-omgGold/30 p-4"><strong className="text-omgGold">{id}</strong><p>{city}</p><p className="text-sm text-gray-400">{services}</p></article>)}
       </div>
-      <OperatorCash mode="deposit" />
+      <div className="mt-4 flex flex-wrap gap-3"><Link to="/payflow/deposit" className="rounded bg-omgGreen px-4 py-2 font-bold">Preparer un depot</Link><Link to="/payflow/withdraw" className="rounded border px-4 py-2 font-bold">Preparer un retrait</Link></div>
     </div>
   );
 }
@@ -70,11 +49,17 @@ function VerificationPanel() {
 }
 
 function SettingsPanel() {
-  const [preferences, setPreferences] = useState({ alerts: true, biometrics: false });
+  const [preferences, setPreferences] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("omg_payflow_preferences") || "null");
+      return { alerts: saved?.alerts !== false, biometrics: saved?.biometrics === true };
+    } catch { return { alerts: true, biometrics: false }; }
+  });
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
   const save = () => {
-    localStorage.setItem("omg_payflow_preferences", JSON.stringify(preferences));
-    setSaved(true);
+    try { localStorage.setItem("omg_payflow_preferences", JSON.stringify(preferences)); setSaved(true); setError(""); }
+    catch { setSaved(false); setError("Impossible d'enregistrer ces préférences sur cet appareil."); }
   };
   return (
     <div className="omg-card mt-6 rounded-xl p-5">
@@ -82,13 +67,17 @@ function SettingsPanel() {
       <label className="mt-3 flex gap-3"><input type="checkbox" checked={preferences.biometrics} onChange={(event) => { setPreferences({ ...preferences, biometrics: event.target.checked }); setSaved(false); }} /> Preparer l'authentification biometrique sur mobile</label>
       <button type="button" onClick={save} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer</button>
       {saved && <p className="mt-3 font-semibold text-omgGreen">Parametres enregistres sur cet appareil.</p>}
+      {error && <p role="alert" className="mt-3 text-red-200">{error}</p>}
     </div>
   );
 }
 
 function PayflowSectionPage() {
   const { section } = useParams();
-  if (!sectionTitles[section]) return <Navigate to="/not-found" replace />;
+  const navigate = useNavigate();
+  const { getModuleProfile } = useAuth();
+  const profile = getModuleProfile("payflow");
+  if (!Object.hasOwn(sectionTitles, section)) return <Navigate to="/not-found" replace />;
 
   const content = {
     wallet: <Wallet />,
@@ -116,9 +105,14 @@ function PayflowSectionPage() {
           <Link to="/payflow" className="inline-flex rounded border border-omgGold/40 px-4 py-2 font-semibold text-omgGold">Retour a Payflow</Link>
         </div>
         <nav aria-label="Navigation Payflow" className="mt-5 flex gap-2 overflow-x-auto pb-2">
-          {payflowNavigation.map(([path, label]) => <Link key={path} to={`/payflow/${path}`} aria-current={section === path ? "page" : undefined} className={`shrink-0 rounded-full border px-3 py-2 text-sm font-bold ${section === path ? "border-omgGold bg-omgGreen text-white" : "border-slate-600 bg-black/40 text-gray-200"}`}>{label}</Link>)}
+          {payflowPages.map(([path, , label]) => <Link key={path} to={`/payflow/${path}`} aria-current={section === path ? "page" : undefined} className={`shrink-0 rounded-full border px-3 py-2 text-sm font-bold ${section === path ? "border-omgGold bg-omgGreen text-white" : "border-slate-600 bg-black/40 text-gray-200"}`}>{label}</Link>)}
         </nav>
-        {content}
+        {!profile ? <div className="omg-card mt-5 rounded-xl p-5"><h2 className="text-xl font-bold text-omgGold">Profil Payflow requis</h2><p className="mt-2">Ouvrez votre profil Payflow pour acceder aux services financiers.</p><Link to="/payflow" className="mt-4 inline-block rounded bg-omgGreen px-4 py-2 font-bold">Ouvrir Payflow</Link></div> : <React.Fragment key={section}>{content}</React.Fragment>}
+        <nav aria-label="Retours Payflow" className="mt-6 flex flex-wrap gap-3">
+          <button type="button" onClick={() => navigate("/payflow")} className="rounded border border-omgGold/40 px-4 py-2">Retour au menu Payflow</button>
+          {section !== "wallet" && <Link to="/payflow/wallet" className="rounded border border-omgGold/40 px-4 py-2">Portefeuille</Link>}
+          {section !== "transactions" && <Link to="/payflow/transactions" className="rounded border border-omgGold/40 px-4 py-2">Historique</Link>}
+        </nav>
       </section>
     </DashboardLayout>
   );

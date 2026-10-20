@@ -1,9 +1,14 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import PayflowOutcome from "./PayflowOutcome";
 import { useTranslation } from "react-i18next";
 import { receiveMoney } from "../../services/payflowService";
 
 function ReceiveMoney() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
   const label = (key, fallback) => t(key, { defaultValue: fallback });
   const [mode, setMode] = useState("message");
   const [pin, setPin] = useState("");
@@ -12,6 +17,7 @@ function ReceiveMoney() {
   const [error, setError] = useState("");
 
   const confirm = async () => {
+    if (pending.current) return;
     setError("");
     setConfirmation("");
 
@@ -25,13 +31,22 @@ function ReceiveMoney() {
       return;
     }
 
+    pending.current = true;
+    setBusy(true);
     try {
       const response = await receiveMoney({ mode, pin, confirmed });
       setConfirmation(response.data || null);
     } catch (submissionError) {
       setError(submissionError?.message || "La reception n'a pas pu etre preparee.");
+    } finally {
+      pending.current = false;
+      setBusy(false);
+      setPin("");
+      setConfirmed(false);
     }
   };
+
+  if (confirmation) return <PayflowOutcome result={confirmation} onRestart={() => { setConfirmation(""); setError(""); }} />;
 
   return (
     <div className="omg-card mt-6 rounded-xl p-5">
@@ -41,10 +56,10 @@ function ReceiveMoney() {
         <button type="button" onClick={() => setMode("message")} className={`rounded border p-4 text-left ${mode === "message" ? "border-omgGreen text-omgGreen" : "border-omgGold/30 text-gray-200"}`}>
           {label("payflow_receive_messages", "Messages recus")}
         </button>
-        <button type="button" onClick={() => setMode("qr-sell")} className={`rounded border p-4 text-left ${mode === "qr-sell" ? "border-omgGreen text-omgGreen" : "border-omgGold/30 text-gray-200"}`}>
+        <button type="button" onClick={() => navigate("/payflow/qr-payment")} className={`rounded border p-4 text-left ${mode === "qr-sell" ? "border-omgGreen text-omgGreen" : "border-omgGold/30 text-gray-200"}`}>
           QR mode Vendre
         </button>
-        <button type="button" onClick={() => setMode("history")} className={`rounded border p-4 text-left ${mode === "history" ? "border-omgGreen text-omgGreen" : "border-omgGold/30 text-gray-200"}`}>
+        <button type="button" onClick={() => navigate("/payflow/transactions")} className={`rounded border p-4 text-left ${mode === "history" ? "border-omgGreen text-omgGreen" : "border-omgGold/30 text-gray-200"}`}>
           {t("history")}
         </button>
       </div>
@@ -77,7 +92,7 @@ function ReceiveMoney() {
           {error}
         </div>
       )}
-      <button type="button" onClick={confirm} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">
+      <button type="button" disabled={busy} onClick={confirm} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:opacity-50">
         {label("payflow_confirm_receive_now", "Confirmer la reception")}
       </button>
       {confirmation && (

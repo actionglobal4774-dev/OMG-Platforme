@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { canAccessCityMerchant, validateCityCoordinates, validateCityTaxPayment } from '../src/modules/city/cityJourney.js';
+const merchant = { id: 'm', email: 'merchant@test', zoneId: 'z' };
+const zones = [{ id: 'z', agentEmail: 'agent@test', municipalityId: 'city' }];
+const cities = [{ id: 'city', manager: 'manager@test' }];
+for (const [userType, email] of [['Marchand', 'merchant@test'], ['Agent', 'agent@test'], ['Responsable mairie', 'manager@test']]) assert.equal(canAccessCityMerchant(merchant, { userType, email }, zones, cities), true);
+assert.equal(canAccessCityMerchant(merchant, { userType: 'Marchand', email: 'other@test' }, zones, cities), false);
+assert.equal(canAccessCityMerchant(merchant, { userType: 'Agent', email: 'other@test' }, zones, cities), false);
+assert.equal(validateCityCoordinates('', ''), '');
+assert.equal(validateCityCoordinates('18.5', '-72.3'), '');
+for (const [lat, lng] of [['91', '0'], ['0', '181'], ['bad', '0'], ['1', '']]) assert.ok(validateCityCoordinates(lat, lng));
+const payment = { amount: 20, periodLabel: 'Mars 2027', confirmed: true };
+assert.equal(validateCityTaxPayment(merchant, payment, []), '');
+assert.ok(validateCityTaxPayment(null, payment, []));
+assert.ok(validateCityTaxPayment(merchant, { ...payment, amount: NaN }, []));
+assert.ok(validateCityTaxPayment(merchant, payment, [{ merchantId: 'm', period: 'Mars 2027', status: 'payment_prepared' }]));
+console.log('City : 15 assertions acces, coordonnees et taxe reussies.');

@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { ownsProperty, validatePropertyContract } from '../src/modules/property/propertyJourney.js';
+const property = { owner: 'owner@example.test' };
+const profile = { email: 'OWNER@example.test' };
+const contract = { tenant: 'Client', amount: '100', startDate: '2026-11-01', endDate: '2026-12-01', confirmed: true };
+assert.equal(ownsProperty(property, profile), true);
+assert.equal(ownsProperty({}, profile), false);
+assert.equal(validatePropertyContract(contract, property, profile), '');
+for (const changes of [{ amount: 'NaN' }, { amount: '-1' }, { tenant: '' }, { confirmed: false }, { endDate: '2026-11-01' }, { endDate: '2026-10-01' }, { startDate: '' }]) assert.ok(validatePropertyContract({ ...contract, ...changes }, property, profile));
+assert.ok(validatePropertyContract(contract, property, { email: 'other@example.test' }));
+console.log('Property : 11 assertions de propriete et contrat reussies.');

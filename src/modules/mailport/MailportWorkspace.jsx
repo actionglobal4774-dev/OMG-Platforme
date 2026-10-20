@@ -1,5 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
+import { isDemoMode } from "../../services/runtimePolicy";
+import { nextMailportStatus, validateMailportDelivery } from "./mailportJourney";
+import { validateMailportCourier, validateMailportPhoto, validateMailportPublication } from "./mailportFormValidation";
 import { useTranslation } from "react-i18next";
+import { Link, useNavigate } from "react-router-dom";
+import { getMailportRole, mailportReferenceLink } from "./mailportNavigation";
 import { saveModuleActivity } from "../../services/activityService";
 import AddressAutocomplete from "../../components/common/AddressAutocomplete";
 import { uploadFirebaseFile } from "../../services/firebaseClient";
@@ -47,8 +53,10 @@ function getActionMode(action) {
   return "search";
 }
 
-function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
+function MailportWorkspace({ selectedAction, profile, closeModuleAction, initialReference = "" }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const role = getMailportRole(profile);
   const mode = getActionMode(selectedAction);
   const [filters, setFilters] = useState(() => ({
     ...blankFilters,
@@ -65,10 +73,11 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
     photoName: "",
     ownerPhotoName: "",
     photoFile: null,
-    ownerPhotoFile: null
+    ownerPhotoFile: null,
+    authorized: false
   });
   const [trackingForm, setTrackingForm] = useState({
-    trackingId: "",
+    trackingId: initialReference,
     packageQr: "",
     fromLocation: "",
     toLocation: "",
@@ -79,23 +88,34 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
   const [selectedAddressId, setSelectedAddressId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("Payflow");
   const [photoUpdate, setPhotoUpdate] = useState({ addressReference: "", addressPhotoName: "", ownerPhotoName: "" });
-  const [courierDraft, setCourierDraft] = useState({ city: "", transport: "", identityReference: "", confirmed: false });
+  const courierKey = `omg_mailport_courier_draft_${profile?.email || "anonymous"}`;
+  const [courierDraft, setCourierDraft] = useState(() => {
+    const blank = { country: profile?.country || "", city: "", transport: "", phone: "", serviceArea: "", confirmed: false };
+    try { const saved = JSON.parse(localStorage.getItem(courierKey) || "null"); return saved ? { ...blank, country: String(saved.country || ""), city: String(saved.city || ""), transport: String(saved.transport || ""), phone: String(saved.phone || ""), serviceArea: String(saved.serviceArea || "") } : blank; } catch { return blank; }
+  });
   const [result, setResult] = useState(null);
   const [serverAddresses, setServerAddresses] = useState(null);
   const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const purchaseRetry = useRef(null);
+  const [review, setReview] = useState(null);
+  const [addressError, setAddressError] = useState("");
+  const [addressQr, setAddressQr] = useState("");
 
   const localAddresses = useMemo(() => searchMailportAddresses(filters), [filters, result]);
-  const addresses = serverAddresses || localAddresses;
+  const addresses = serverAddresses ?? (isDemoMode && addressError ? localAddresses : []);
   const packages = useMemo(() => getMailportPackages().slice(0, 5), [result]);
-  const selectedAddress = addresses.find((address) => address.id === selectedAddressId) || addresses[0] || null;
+  const selectedAddress = addresses.find((address) => address.id === selectedAddressId) || null;
 
   const label = (key, fallback) => t(key, { defaultValue: fallback });
 
   useEffect(() => {
     let active = true;
+    setServerAddresses(null);
+    setAddressError("");
     searchSecureMailportAddresses(filters)
       .then((response) => { if (active) setServerAddresses(response.addresses || []); })
-      .catch(() => { if (active) setServerAddresses(null); });
+      .catch(() => { if (active) setAddressError("Recherche serveur indisponible. Aucun achat ne peut etre confirme sur des exemples locaux."); });
     return () => { active = false; };
   }, [filters, result]);
 
@@ -104,18 +124,18 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const updatePublish = (field, value) => {
-    setPublishForm((current) => ({ ...current, [field]: value }));
+    setPublishForm((current) => ({ ...current, [field]: value, authorized: false, ...(field === "street" ? { latitude: undefined, longitude: undefined, placeId: "" } : {}) }));
   };
 
   const updateTracking = (field, value) => {
     setTrackingForm((current) => ({ ...current, [field]: value }));
   };
 
-  const rememberActivity = (action, reference, message) => {
+  const rememberActivity = (action, reference, message, status = "prepared") => {
     saveModuleActivity("mailport", {
       action,
       reference,
-      status: "confirmed",
+      status,
       profile: {
         firstName: profile?.firstName,
         lastName: profile?.lastName,
@@ -124,10 +144,13 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
         userType: profile?.userType
       }
     });
-    setResult({ reference, message });
+    setResult({ reference, message, status });
   };
 
   const publishAddress = async () => {
+    if (pending.current) return;
+    const validation = validateMailportPublication(publishForm);
+    if (validation) { setResult({ message: validation }); return; }
     if (!publishForm.city || !publishForm.street || !publishForm.photoFile || !Number.isFinite(publishForm.latitude) || !Number.isFinite(publishForm.longitude)) {
       setResult({
         reference: "",
@@ -135,6 +158,7 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
       });
       return;
     }
+    pending.current = true;
     setBusy(true);
     try {
       const addressPhoto = await uploadFirebaseFile(publishForm.photoFile, "mailportAddressPhotos");
@@ -146,15 +170,18 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
         photoFile: undefined,
         ownerPhotoFile: undefined
       });
-      rememberActivity(label("mailport_publish_address_free", "Publier mon adresse gratuitement"), address.addressId, "Adresse envoyee pour verification administrative avant publication.");
+      rememberActivity(label("mailport_publish_address_free", "Publier mon adresse gratuitement"), address.addressId, "Adresse envoyee pour verification administrative avant publication.", "pending_admin");
     } catch (error) {
       setResult({ reference: "", message: error?.message || "Publication Mailport impossible." });
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   };
 
-  const buyAddress = async () => {
+  const buyAddress = async (confirmed = false) => {
+    if (pending.current) return;
+    if (!serverAddresses) { setResult({ message: "La recherche serveur doit reussir avant tout achat." }); return; }
     if (!selectedAddress) {
       setResult({
         reference: "",
@@ -162,12 +189,20 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
       });
       return;
     }
+    if (!confirmed) { setResult(null); setReview({ kind: "purchase", address: selectedAddress, paymentMethod }); return; }
+    pending.current = true;
     setBusy(true);
     try {
-      const purchase = await prepareSecureMailportAddressPurchase({ addressId: selectedAddress.id, paymentMethod });
+      const retry = purchaseRetry.current;
+      const purchase = retry?.addressId === selectedAddress.id && retry?.paymentMethod === paymentMethod
+        ? retry.purchase : await prepareSecureMailportAddressPurchase({ addressId: selectedAddress.id, paymentMethod });
+      purchaseRetry.current = { addressId: selectedAddress.id, paymentMethod, purchase };
       if (String(paymentMethod).toLowerCase() === "payflow") {
         const paid = await completeSecureMailportAddressPurchaseWithPayflow(purchase.purchaseId);
-        rememberActivity(label("mailport_buy_address", "Acheter adresse"), paid.purchaseId, `Adresse payee ${paid.amount} ${paid.currency}. QR Mailport emis apres confirmation Payflow.`);
+        setAddressQr(paid.addressQrPayload || "");
+        purchaseRetry.current = null;
+        rememberActivity(label("mailport_buy_address", "Acheter adresse"), paid.purchaseId, `Adresse payee ${paid.amount} ${paid.currency}.`, "paid");
+        setReview(null);
       } else if (String(paymentMethod).toLowerCase() === "paypal") {
         const baseUrl = `${window.location.origin}${window.location.pathname}`;
         const order = await createPayPalOrder({ amount: purchase.amount, currency: purchase.currency, moduleId: "mailport", action: `mailport_address_purchase:${purchase.purchaseId}`, returnUrl: `${baseUrl}#/paypal-return`, cancelUrl: `${baseUrl}#/paypal-cancel` });
@@ -186,18 +221,21 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
     } catch (error) {
       setResult({ reference: "", message: error?.message || "Preparation de l'achat impossible." });
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   };
 
-  const confirmPackageStep = async (action) => {
-    if (!trackingForm.trackingId && !trackingForm.packageQr) {
+  const confirmPackageStep = async (action, confirmed = false) => {
+    if (pending.current) return;
+    if (!trackingForm.packageQr.trim()) {
       setResult({
         reference: "",
-        message: label("mailport_tracking_required", "Entrez un QR colis ou un numero de suivi avant de continuer.")
+        message: "Le service securise exige le contenu complet du QR signe du colis. Le numero seul ne suffit pas."
       });
       return;
     }
+    pending.current = true;
     setBusy(true);
     try {
       if (String(action).toLowerCase().includes("suivre") || String(action).toLowerCase().includes("track")) {
@@ -205,21 +243,25 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
         rememberActivity(action, inspected.packageId, `Statut colis: ${inspected.status}. ${inspected.fromLocation} vers ${inspected.toLocation}.`);
         return;
       }
-      const normalized = String(action).toLowerCase();
-      const nextStatus = normalized.includes("livrer") || normalized.includes("deliver")
-        ? "delivered"
-        : normalized.includes("recevoir") || normalized.includes("receive")
-          ? "in_transit"
-          : "carrier_scanned";
+      const inspected = await inspectSecureMailportPackage(trackingForm.packageQr);
+      const nextStatus = nextMailportStatus(inspected.status);
+      const validation = validateMailportDelivery(role, nextStatus, trackingForm.signatureName, trackingForm.proofPhotoFile);
+      if (validation) throw new Error(validation);
+      if (!confirmed) { setResult(null); setReview({ kind: "delivery", action, packageId: inspected.packageId, status: inspected.status, nextStatus }); return; }
+      if (review?.packageId !== inspected.packageId || review?.status !== inspected.status) throw new Error("Le statut a change. Annulez puis verifiez de nouveau le colis.");
       let proofPhotoPath = "";
       if (nextStatus === "delivered" && trackingForm.proofPhotoFile) {
+        const photoError = validateMailportPhoto(trackingForm.proofPhotoFile);
+        if (photoError) throw new Error(photoError);
         proofPhotoPath = (await uploadFirebaseFile(trackingForm.proofPhotoFile, "mailportDeliveryProofs")).path;
       }
       const step = await advanceSecureMailportPackage({ payload: trackingForm.packageQr || trackingForm.trackingId, nextStatus, proofPhotoPath, receiverName: trackingForm.signatureName });
-      rememberActivity(action, step.packageId, `Etape Mailport confirmee: ${step.status}.`);
+      rememberActivity(action, step.packageId, `Etape Mailport confirmee: ${step.status}.`, "confirmed");
+      setReview(null);
     } catch (error) {
       setResult({ reference: "", message: error?.message || "Mise a jour du colis impossible." });
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   };
@@ -235,20 +277,16 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
     rememberActivity(
       label("mailport_add_address_photos", "Ajouter photos adresse"),
       createReference("MAILPORT-PHOTO"),
-      label("mailport_photos_saved", "Les photos de l'adresse ont ete preparees et rattachees a sa reference.")
+      "Selection preparee uniquement : aucune photo transmise ni modification de l'adresse. Le service de mise a jour reste a connecter."
     );
   };
 
   const submitCourierApplication = () => {
-    if (!courierDraft.city.trim() || !courierDraft.transport.trim() || !courierDraft.identityReference.trim()) {
-      setResult({ reference: "", message: "Ville, moyen de transport et reference d'identite sont obligatoires." });
-      return;
-    }
-    if (!courierDraft.confirmed) {
-      setResult({ reference: "", message: "Veuillez confirmer l'exactitude de la candidature." });
-      return;
-    }
-    rememberActivity("Candidature livreur", createReference("MAILPORT-COURIER"), "Candidature livreur enregistree pour verification.");
+    const error = validateMailportCourier(courierDraft);
+    if (error) { setResult({ message: error }); return; }
+    try { localStorage.setItem(courierKey, JSON.stringify({ country: courierDraft.country, city: courierDraft.city, transport: courierDraft.transport, phone: courierDraft.phone, serviceArea: courierDraft.serviceArea })); }
+    catch { setResult({ message: "Stockage indisponible : brouillon non sauvegarde. Conservez les informations avant de quitter." }); return; }
+    rememberActivity("Candidature livreur", createReference("MAILPORT-COURIER"), "Brouillon local uniquement : candidature non transmise. Le service de candidature reste a connecter.");
   };
 
   const renderAddressSearch = () => (
@@ -256,6 +294,7 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
       <h3 className="text-lg font-black text-slate-900">
         {label("mailport_reference_addresses", "Liste des adresses referentielles")}
       </h3>
+      {addressError && <p role="alert" className="mt-3 text-amber-800">{addressError} {isDemoMode ? "Les adresses affichees sont des exemples." : ""}</p>}
       <div className="mt-4 grid gap-3 md:grid-cols-5">
         <input className="rounded border p-3" value={filters.country} onChange={(event) => updateFilters("country", event.target.value)} placeholder={label("country", "Pays")} />
         <input className="rounded border p-3" value={filters.city} onChange={(event) => updateFilters("city", event.target.value)} placeholder={label("mailport_city", "Ville")} />
@@ -284,6 +323,14 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
     </div>
   );
 
+  if (review) return <div className="mt-5 space-y-4 rounded-2xl border bg-white p-5">
+    <h3 className="text-xl font-bold">Verifier avant confirmation</h3>
+    {review.kind === "purchase" ? <><p>{review.address.street}, {review.address.city}, {review.address.country}</p><p>4,99 USD — {review.paymentMethod}</p><p>La confirmation lance le paiement ou ouvre le prestataire choisi. Aucun QR sans paiement confirme.</p></> : <><p>Colis : {review.packageId}</p><p>{review.status} → {review.nextStatus}</p><p>La confirmation modifie le statut du colis.</p></>}
+    <button disabled={busy} className="rounded bg-omgGreen p-3 font-bold text-white disabled:opacity-50" onClick={() => review.kind === "purchase" ? buyAddress(true) : confirmPackageStep(review.action, true)}>{busy ? "Traitement…" : "Confirmer"}</button>
+    <button disabled={busy} className="ml-3 rounded border p-3" onClick={() => { setReview(null); setResult(null); }}>Modifier / annuler</button>
+    {result && <p role="alert">{result.message}</p>}
+  </div>;
+
   return (
     <div className="mt-5 space-y-5">
       {mode === "publish" && (
@@ -300,6 +347,7 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
               onChange={(value) => updatePublish("street", value)}
               onAddress={(address) => setPublishForm((current) => ({
                 ...current,
+                authorized: false,
                 street: address.street || address.formattedAddress,
                 city: address.city || current.city,
                 zone: address.zone || current.zone,
@@ -323,6 +371,8 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
             </label>
             <textarea className="rounded border p-3 md:col-span-2" rows={3} value={publishForm.description} onChange={(event) => updatePublish("description", event.target.value)} placeholder={label("description", "Description courte de l'adresse")} />
           </div>
+          <p className="mt-3 text-sm">Photos JPG, PNG ou WebP de 5 Mo maximum. L'adresse restera en attente de verification administrative.</p>
+          <label className="mt-3 flex gap-2"><input type="checkbox" checked={publishForm.authorized} onChange={(event) => setPublishForm((current) => ({ ...current, authorized: event.target.checked }))} />Je suis proprietaire ou autorise a publier cette adresse et ses photos.</label>
           <button type="button" disabled={busy} onClick={publishAddress} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:opacity-50">
             {label("mailport_publish_address_free", "Publier mon adresse gratuitement")}
           </button>
@@ -359,16 +409,19 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
       {mode === "application" && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-lg font-black text-slate-900">Candidature livreur Mailport</h3>
+          <p className="mt-2 text-sm text-amber-800">Brouillon sur cet appareil uniquement. Aucune candidature transmise. Ne saisissez pas de document d'identite ; il sera demande par le service securise si necessaire.</p>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <input className="rounded border p-3" value={courierDraft.city} onChange={(event) => setCourierDraft({ ...courierDraft, city: event.target.value })} placeholder="Ville de service" />
-            <input className="rounded border p-3" value={courierDraft.transport} onChange={(event) => setCourierDraft({ ...courierDraft, transport: event.target.value })} placeholder="Moyen de transport" />
-            <input className="rounded border p-3 md:col-span-2" value={courierDraft.identityReference} onChange={(event) => setCourierDraft({ ...courierDraft, identityReference: event.target.value })} placeholder="Reference du document d'identite" />
+            <input aria-label="Pays de service" className="rounded border p-3" value={courierDraft.country} onChange={(event) => setCourierDraft({ ...courierDraft, country: event.target.value, confirmed: false })} placeholder="Pays de service" />
+            <input className="rounded border p-3" value={courierDraft.city} onChange={(event) => setCourierDraft({ ...courierDraft, city: event.target.value, confirmed: false })} placeholder="Ville de service" />
+            <input className="rounded border p-3" value={courierDraft.transport} onChange={(event) => setCourierDraft({ ...courierDraft, transport: event.target.value, confirmed: false })} placeholder="Moyen de transport" />
+            <input aria-label="Telephone de contact" type="tel" className="rounded border p-3" value={courierDraft.phone} onChange={(event) => setCourierDraft({ ...courierDraft, phone: event.target.value, confirmed: false })} placeholder="Telephone avec indicatif pays" />
+            <input aria-label="Zone de service" className="rounded border p-3 md:col-span-2" value={courierDraft.serviceArea} onChange={(event) => setCourierDraft({ ...courierDraft, serviceArea: event.target.value, confirmed: false })} placeholder="Quartiers ou zone de service" />
           </div>
           <label className="mt-4 flex items-start gap-3 rounded-xl border border-slate-200 p-3 text-sm text-slate-700">
             <input type="checkbox" checked={courierDraft.confirmed} onChange={(event) => setCourierDraft({ ...courierDraft, confirmed: event.target.checked })} />
             <span>Je confirme que les informations de cette candidature sont exactes.</span>
           </label>
-          <button type="button" onClick={submitCourierApplication} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Envoyer la candidature</button>
+          <button type="button" onClick={submitCourierApplication} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Sauvegarder le brouillon</button>
         </div>
       )}
 
@@ -381,8 +434,7 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
                 key={item.id}
                 type="button"
                 onClick={() => {
-                  setTrackingForm((current) => ({ ...current, trackingId: item.trackingId || item.id }));
-                  rememberActivity("Mission Mailport selectionnee", item.trackingId || item.id, "Mission selectionnee. Le livreur peut maintenant confirmer la recuperation.");
+                  navigate(`${mailportReferenceLink("delivery", item.trackingId || item.id)}&view=pickup`);
                 }}
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 p-4 text-left text-slate-700"
               >
@@ -396,20 +448,15 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
       {mode === "qr" && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-lg font-black text-slate-900">QR de mon adresse Mailport</h3>
-          {renderAddressSearch()}
-          <div className="mt-4 rounded-xl border border-omgGreen/40 bg-green-50 p-4 text-center">
-            <div className="text-sm text-slate-600">Reference QR</div>
-            <div className="mt-2 break-all text-xl font-black text-omgGreen">
-              {selectedAddress ? `MAILPORT-QR-${selectedAddress.id}` : "Selectionnez une adresse"}
-            </div>
-          </div>
+          <p className="mt-4 text-slate-700">Un QR valide est emis uniquement apres paiement confirme. Aucun QR ne peut etre genere depuis le catalogue public. La recuperation des QR d'achats anterieurs reste a connecter au serveur.</p>
+          <Link className="mt-4 inline-block font-bold text-omgGreen" to="/mailport/address-search">Rechercher une adresse</Link>
         </div>
       )}
 
       {(mode === "buy" || mode === "search") && (
         <>
           {renderAddressSearch()}
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          {role === "buyer" && <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <h3 className="text-lg font-black text-slate-900">
               {label("mailport_buy_address", "Acheter une adresse referentielle")}
             </h3>
@@ -417,10 +464,8 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
               <option value="Payflow">Payflow</option>
               <option value="PayPal">PayPal</option>
               <option value="Stripe">Carte bancaire avec Stripe</option>
-              <option value="Carte de credit">Carte de credit</option>
-              <option value="Mastercard">Mastercard</option>
-              <option value="Carte de debit">Carte de debit</option>
-              <option value="Moyen local autorise">Moyen local autorise</option>
+              <option disabled>MonCash — integration Mailport a terminer</option>
+              <option disabled>NatCash — integration Mailport a terminer</option>
             </select>
             {selectedAddress && (
               <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
@@ -429,10 +474,10 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
                 {label("amount", "Montant")}: 4.99 USD
               </div>
             )}
-            <button type="button" onClick={buyAddress} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">
-              {label("pay_with_payflow", "Payer avec Payflow")}
+            <button type="button" disabled={busy || !selectedAddress || !serverAddresses} onClick={() => buyAddress()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:opacity-50">
+              Verifier l'achat avec {paymentMethod}
             </button>
-          </div>
+          </div>}
         </>
       )}
 
@@ -450,6 +495,7 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
             {packages.map((item) => (
               <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                 <strong>{item.trackingId || item.qrCode || item.id}</strong> - {item.status}
+                <Link className="ml-3 font-bold text-omgGreen" to={`/mailport/parcels/${encodeURIComponent(item.trackingId || item.id)}`}>Voir le détail</Link>
               </div>
             ))}
           </div>
@@ -471,14 +517,14 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
             <input className="rounded border p-3" value={trackingForm.signatureName} onChange={(event) => updateTracking("signatureName", event.target.value)} placeholder={label("signature", "Signature / nom receveur")} />
           </div>
           <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-            <button type="button" onClick={() => confirmPackageStep(label("mailport_pickup_package", "Recuperer colis"))} className="rounded bg-omgGreen px-5 py-3 font-bold text-white">
+            {role === "carrier" && <button type="button" onClick={() => confirmPackageStep(label("mailport_pickup_package", "Recuperer colis"))} className="rounded bg-omgGreen px-5 py-3 font-bold text-white">
               {label("mailport_pickup_package", "Recuperer colis")}
-            </button>
-            <button type="button" onClick={() => confirmPackageStep(label("mailport_receive_package", "Recevoir colis"))} className="rounded border border-omgGreen px-5 py-3 font-bold text-omgGreen">
+            </button>}
+            {role === "owner" && <button type="button" onClick={() => confirmPackageStep(label("mailport_receive_package", "Recevoir colis"))} className="rounded border border-omgGreen px-5 py-3 font-bold text-omgGreen">
               {label("mailport_receive_package", "Recevoir colis")}
-            </button>
-            <button type="button" onClick={() => confirmPackageStep(label("mailport_deliver_package", "Livrer colis"))} className="rounded border border-omgGold px-5 py-3 font-bold text-slate-800">
-              {label("mailport_deliver_package", "Livrer colis")}
+            </button>}
+            <button type="button" disabled={busy || role !== "carrier"} onClick={() => confirmPackageStep("Verifier prochaine etape")} className="rounded border border-omgGold px-5 py-3 font-bold text-slate-800 disabled:opacity-50">
+              Verifier la prochaine etape du colis
             </button>
           </div>
         </div>
@@ -494,7 +540,7 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
             </div>
             <div className="rounded-xl bg-slate-50 p-4">
               <div className="text-sm text-slate-500">{label("payment_status", "Paiement")}</div>
-              <div className="mt-2 font-black text-omgGreen">{label("payflow_connected", "Connecte a Payflow")}</div>
+              <div className="mt-2 font-black text-omgGreen">Solde non verifie</div>
             </div>
             <div className="rounded-xl bg-slate-50 p-4">
               <div className="text-sm text-slate-500">{label("revenue_status", "Statut des revenus")}</div>
@@ -517,6 +563,9 @@ function MailportWorkspace({ selectedAction, profile, closeModuleAction }) {
           {result.reference && (
             <div className="mt-2">{label("reference", "Reference")}: {result.reference}</div>
           )}
+          <p className="mt-2">Statut : {result.status || "non confirme"}</p>
+          {addressQr && <div className="mt-4"><QRCodeSVG value={addressQr} size={192} title="QR adresse emis par le serveur" /><p>Conservez ce QR confidentiel : il n'est pas sauvegarde dans le navigateur.</p></div>}
+          <Link className="mt-3 inline-block underline" to="/mailport/history">Consulter l'historique des colis</Link>
         </div>
       )}
 

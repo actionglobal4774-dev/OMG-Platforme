@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { getCollection, upsertItem } from "../../services/localActionService";
 import { saveModuleActivity } from "../../services/activityService";
 
-const MODULES = ["Payflow", "Mailport", "Property", "Restaurant", "Store", "Health", "School", "City", "USA Tax Pro", "University"];
+const MODULES = ["Payflow", "Mailport", "Property", "Restaurant", "Store", "Health", "School", "City", "USA Tax Pro", "University", "Travel"];
 
 function normalize(value) {
   return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -79,8 +79,9 @@ export default function AdminFinancialGovernance({ profile }) {
 
   return (
     <div className="space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 font-bold text-amber-900">SIMULATEUR LOCAL — pas une comptabilite reelle. Le taux saisi est une hypothese, non un tarif applique aux modules. Aucun rapprochement bancaire ni versement certifie.</p>
       <section className="rounded-2xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-black">Pilotage financier des 10 modules</h3><p className="text-sm text-slate-600">Volume marchand, fonds clients et revenu OMG sont comptabilises separement.</p></div><input type="month" className="rounded border p-3" value={period} onChange={(e) => setPeriod(e.target.value)} /></div>
+        <div className="flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-black">Simulation financiere des 11 modules</h3><p className="text-sm text-slate-600">Estimations locales uniquement, non rapprochees avec les prestataires.</p></div><input type="month" className="rounded border p-3" value={period} onChange={(e) => setPeriod(e.target.value)} /></div>
         <div className="mt-4 grid gap-3 md:grid-cols-4"><Card label="Volume marchand" value={`${money(totals.grossVolume)} USD`} /><Card label="Fonds dus aux partenaires" value={`${money(totals.clientFunds)} USD`} tone="amber" /><Card label="Revenu brut OMG" value={`${money(totals.platformRevenue)} USD`} tone="emerald" /><Card label="Resultat estime" value={`${money(result)} USD`} tone={result >= 0 ? "emerald" : "red"} /></div>
       </section>
 

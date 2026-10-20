@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { useTranslation } from "react-i18next";
+import PayflowOutcome from "./PayflowOutcome";
+import { recordPayflowEvent } from "../../services/payflowJourney";
 import {
   createSecurePayflowQr,
   inspectSecurePayflowQr,
@@ -130,6 +132,7 @@ function PayflowQr() {
     setStatus("");
     try {
       const result = await redeemSecurePayflowQr({ payload: buy.payload, humanConfirmed: true });
+      recordPayflowEvent({ reference: result.receiptId, type: "qr_payment", amount: result.amount, currency: result.currency, status: result.status === "completed" ? "completed" : "prepared", live: true });
       setReceipt(result);
       setQuote(null);
       setStatus(label("payflow_qr_paid", "Paiement QR termine. Le QR est maintenant inutilisable."));
@@ -141,6 +144,7 @@ function PayflowQr() {
     }
   };
 
+  if (receipt) return <PayflowOutcome result={{ ...receipt, reference: receipt.receiptId, live: true }} amount={receipt.amount} currency={receipt.currency} onRestart={() => { setReceipt(null); setQuote(null); setBuy({ payload: "", pin: "", confirmed: false }); setStatus(""); }} />;
   return (
     <section className="omg-card mt-6 rounded-xl p-5">
       <h2 className="text-2xl font-bold text-omgGold">{label("payflow_use_qr", "Utiliser le QR Payflow")}</h2>

@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { validateHealthAppointment, validateHealthPayment, validateHealthShare } from '../src/modules/health/healthJourney.js';
+const now = Date.parse('2026-10-19T00:00:00Z');
+const appointment = { date: '2026-11-01', time: '12:00', consent: true };
+assert.equal(validateHealthAppointment(appointment, { id: 'p' }, [], 'patient', now), '');
+assert.ok(validateHealthAppointment({ ...appointment, date: 'bad' }, { id: 'p' }, [], 'patient', now));
+assert.ok(validateHealthAppointment({ ...appointment, consent: false }, { id: 'p' }, [], 'patient', now));
+assert.ok(validateHealthAppointment(appointment, { id: 'p' }, [{ ...appointment, patient: 'patient', providerId: 'p' }], 'patient', now));
+const item = { patient: 'patient', price: 65 };
+assert.equal(validateHealthPayment(item, 'patient', true), '');
+for (const change of [{ price: NaN }, { price: -1 }, { paymentId: 'existing' }, { paymentStatus: 'simulated' }, { patient: 'other' }]) assert.ok(validateHealthPayment({ ...item, ...change }, 'patient', true));
+assert.ok(validateHealthPayment(item, 'patient', false));
+const share = { patientRef: 'patient', recipient: 'doctor', scope: 'results', expiresAt: '2026-12-01' };
+assert.equal(validateHealthShare(share, 'patient', true, now), '');
+assert.ok(validateHealthShare({ ...share, patientRef: 'other' }, 'patient', true, now));
+assert.ok(validateHealthShare({ ...share, expiresAt: '2026-01-01' }, 'patient', true, now));
+console.log('Sante : 14 assertions rendez-vous, paiement et partage reussies.');

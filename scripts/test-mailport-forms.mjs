@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { validateMailportCourier, validateMailportPhoto, validateMailportPublication } from '../src/modules/mailport/mailportFormValidation.js';
+const photo = { type: 'image/jpeg', size: 1000 };
+assert.equal(validateMailportPhoto(photo), '');
+for (const file of [null, { type: 'text/html', size: 1 }, { ...photo, size: 0 }, { ...photo, size: 6 * 1024 * 1024 }]) assert.ok(validateMailportPhoto(file));
+const publication = { country: 'Haiti', city: 'Port-au-Prince', street: 'Rue Exemple', addressType: 'Maison', latitude: 18.5, longitude: -72.3, photoFile: photo, authorized: true };
+assert.equal(validateMailportPublication(publication), '');
+for (const change of [{ latitude: 91 }, { longitude: NaN }, { country: '' }, { authorized: false }]) assert.ok(validateMailportPublication({ ...publication, ...change }));
+const courier = { country: 'Haiti', city: 'Port-au-Prince', transport: 'Moto', serviceArea: 'Centre', phone: '+509 1234 5678', confirmed: true };
+assert.equal(validateMailportCourier(courier), '');
+for (const change of [{ phone: 'abc' }, { serviceArea: '' }, { confirmed: false }]) assert.ok(validateMailportCourier({ ...courier, ...change }));
+console.log('Mailport : 14 assertions formulaires et photos reussies.');

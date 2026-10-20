@@ -1,4 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { canAccessCityMerchant, validateCityCoordinates, validateCityTaxPayment } from "./cityJourney";
 import {
   generateReceipt,
   getCollection,
@@ -34,24 +36,29 @@ function addAudit(action, actor, entityId, details = "") {
   return upsertItem("city_audit", { action, actor, entityId, details, immutable: true, timestamp: new Date().toISOString() });
 }
 
-function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
+function CityWorkspace({ selectedAction, profile, closeModuleAction, initialReference = "" }) {
   const mode = getMode(selectedAction);
   const [municipality, setMunicipality] = useState({ name: "", country: "", city: "", taxRate: "", defaultPeriod: "Mois" });
   const [zone, setZone] = useState({ municipalityId: "", name: "", streets: "", agentEmail: "" });
   const [merchant, setMerchant] = useState({ name: "", email: "", phone: "", category: "", tradeType: "Detail", zoneId: "", street: "", taxAmount: "", period: "Mois" });
-  const [photo, setPhoto] = useState({ merchantId: "", fileName: "", location: "" });
-  const [fieldData, setFieldData] = useState({ merchantId: "", products: "", observations: "", latitude: "", longitude: "" });
-  const [payment, setPayment] = useState({ merchantId: "", periodLabel: "", amount: "", method: "Payflow", pin: "", confirmed: false });
+  const [photo, setPhoto] = useState({ merchantId: initialReference, fileName: "", location: "" });
+  const [fieldData, setFieldData] = useState({ merchantId: initialReference, products: "", observations: "", latitude: "", longitude: "" });
+  const [payment, setPayment] = useState({ merchantId: initialReference, periodLabel: "", amount: "", method: "Payflow", pin: "", confirmed: false });
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState("");
   const [reference, setReference] = useState("");
+  const [review, setReview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
 
-  const municipalities = getCollection("city_municipalities");
-  const zones = getCollection("city_zones");
-  const merchants = getCollection("merchants");
-  const cityPayments = getCollection("city_tax_payments");
-  const audit = getCollection("city_audit");
-  const currentMerchant = merchants.find((item) => normalize(item.email) === normalize(profile?.email)) || merchants[0];
+  const allMunicipalities = getCollection("city_municipalities");
+  const allZones = getCollection("city_zones");
+  const municipalities = allMunicipalities.filter((item) => profile?.email && normalize(item.manager) === normalize(profile.email));
+  const zones = allZones.filter((item) => profile?.email && (profile.userType === "Agent" ? normalize(item.agentEmail) === normalize(profile.email) : municipalities.some((entry) => entry.id === item.municipalityId)));
+  const merchants = getCollection("merchants").filter((item) => canAccessCityMerchant(item, profile, allZones, allMunicipalities));
+  const cityPayments = getCollection("city_tax_payments").filter((item) => merchants.some((entry) => entry.id === item.merchantId));
+  const audit = getCollection("city_audit").filter((item) => item.actor === profile?.email || merchants.some((entry) => entry.id === item.entityId));
+  const currentMerchant = merchants.find((item) => profile?.email && normalize(item.email) === normalize(profile.email));
 
   const visibleMerchants = useMemo(() => merchants.filter((item) => {
     const query = normalize(search);
@@ -62,11 +69,11 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
     saveModuleActivity("city", {
       action,
       reference: nextReference,
-      status: "confirmed",
+      status: "prepared",
       profile: { email: profile?.email, userType: profile?.userType, country: profile?.country }
     });
     setReference(nextReference);
-    setNotice(message);
+    setNotice(`${message} Enregistrement local : validation municipale serveur non garantie.`);
   };
 
   const prepareWithAssistant = () => {
@@ -105,7 +112,7 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
         ...current,
         merchantId: current.merchantId || selected?.id || "",
         amount: current.amount || String(selected?.taxAmount || ""),
-        periodLabel: current.periodLabel || selected?.period || "Mois"
+        periodLabel: current.periodLabel
       }));
       setNotice("Assistant : marchand, periode et montant prepares. Le paiement doit etre confirme manuellement.");
       return;
@@ -141,6 +148,7 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const assignZone = () => {
+    if (!municipalities.some((item) => item.id === zone.municipalityId)) { setNotice("Choisissez votre propre municipalite."); return; }
     if (!zone.municipalityId || !zone.name.trim() || !zone.streets.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(zone.agentEmail)) {
       setNotice("Municipalite, zone, rues et email agent sont obligatoires.");
       return;
@@ -151,6 +159,8 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const saveMerchant = () => {
+    if (!zones.some((item) => item.id === merchant.zoneId)) { setNotice("Choisissez une zone qui vous est attribuee."); return; }
+    if (merchants.some((item) => normalize(item.email) === normalize(merchant.email) && item.zoneId === merchant.zoneId)) { setNotice("Ce marchand existe deja dans cette zone."); return; }
     const taxAmount = Number(merchant.taxAmount);
     if (!merchant.name.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(merchant.email) || !merchant.phone.trim() || !merchant.category.trim() || !merchant.zoneId || !merchant.street.trim() || !Number.isFinite(taxAmount) || taxAmount < 0) {
       setNotice("Identite, contact, categorie, zone, rue et taxe valide sont obligatoires.");
@@ -162,16 +172,20 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const savePhoto = () => {
+    if (!merchants.some((item) => item.id === photo.merchantId)) { setNotice("Dossier hors de votre zone."); return; }
     if (!photo.merchantId || !photo.fileName || !photo.location.trim()) {
       setNotice("Marchand, photo et localisation sont obligatoires.");
       return;
     }
     const result = upsertItem("city_merchant_media", { ...photo, capturedBy: profile?.email, authorized: true });
     addAudit("MERCHANT_PHOTO_ADDED", profile?.email, photo.merchantId, photo.location);
-    complete("Photo marchand", result.data.id, "Photo et localisation rattachees au dossier.");
+    complete("Photo marchand", result.data.id, "Nom de fichier et localisation conserves localement ; photo non televersee.");
   };
 
   const saveFieldData = () => {
+    if (!merchants.some((item) => item.id === fieldData.merchantId)) { setNotice("Dossier hors de votre zone."); return; }
+    const coordinateError = validateCityCoordinates(fieldData.latitude, fieldData.longitude);
+    if (coordinateError) { setNotice(coordinateError); return; }
     if (!fieldData.merchantId || !fieldData.products.trim() || !fieldData.observations.trim()) {
       setNotice("Marchand, marchandises et observations sont obligatoires.");
       return;
@@ -181,24 +195,38 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
     complete("Collecte terrain", result.data.id, "Donnees terrain enregistrees.");
   };
 
-  const processTaxPayment = async (agentMode = false) => {
-    const selected = merchants.find((item) => item.id === payment.merchantId) || currentMerchant;
-    const amount = Number(payment.amount || selected?.taxAmount);
+  const processTaxPayment = async (agentMode = false, confirmed = false) => {
+    if (pending.current) return;
+    const selected = agentMode ? merchants.find((item) => item.id === payment.merchantId) : currentMerchant;
+    const validation = validateCityTaxPayment(selected, payment, cityPayments);
+    if (validation) { setNotice(validation); return; }
+    const amount = Number(payment.amount);
     if (!selected || !payment.periodLabel.trim() || !Number.isFinite(amount) || amount <= 0) {
       setNotice("Marchand, periode et montant valide sont obligatoires.");
       return;
     }
-    if (!agentMode && payment.method === "Payflow" && !/^\d{4}$/.test(payment.pin)) {
-      setNotice("Entrez un PIN Payflow a 4 chiffres.");
-      return;
-    }
+    if (agentMode && profile?.userType !== "Agent") { setNotice("Role agent requis."); return; }
+    if (!agentMode && payment.method !== "Payflow") { setNotice("Ce moyen n'est pas encore connecte dans ce parcours. Aucun paiement lance."); return; }
     if (!payment.confirmed) {
       setNotice("Confirmez le marchand, la periode et le montant.");
       return;
     }
+    if (!confirmed) { setNotice(""); setReview({ agentMode, merchant: selected, amount }); return; }
+    if (agentMode) {
+      const declaration = upsertItem("city_tax_payments", { merchantId: selected.id, period: payment.periodLabel.trim(), amount, currency: "USD", collector: profile?.email, status: "collection_declared" });
+      addAudit("COLLECTION_DECLARED", profile?.email, selected.id, declaration.data.id);
+      setReview(null);
+      setPayment((current) => ({ ...current, confirmed: false }));
+      complete("Marquer paiement", declaration.data.id, "Declaration locale de collecte, non encaissement confirme. Aucun statut fiscal PAYE attribue.");
+      return;
+    }
+    pending.current = true;
+    setBusy(true);
     let paid;
     try { paid = await prepareModulePayment({ moduleId: "city", action: "Payer taxe", amount, currency: "USD", label: "City Municipal Tax", method: agentMode ? "Agent collection" : payment.method }); }
     catch (error) { setNotice(error?.message || "Preparation de la taxe impossible."); return; }
+    finally { pending.current = false; setBusy(false); }
+    if (!paid.ok) { setNotice(paid.error || "Preparation impossible."); return; }
     const taxPayment = upsertItem("city_tax_payments", {
       paymentId: paid.data.id,
       merchantId: selected.id,
@@ -206,12 +234,13 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
       amount,
       currency: "USD",
       collector: agentMode ? profile?.email : "self-service",
-      status: paid.live ? "payment_prepared" : "paid",
+      status: paid.live ? "payment_prepared" : "simulated",
       immutable: true
     });
-    upsertItem("merchants", { ...selected, taxStatus: paid.live ? "payment_prepared" : "paid", lastPaidAt: new Date().toISOString() });
     if (!paid.live) generateReceipt(paid.data);
-    addAudit("TAX_PAID", profile?.email, selected.id, `${amount} USD · ${payment.periodLabel}`);
+    addAudit("TAX_PAYMENT_PREPARED", profile?.email, selected.id, `${amount} USD · ${payment.periodLabel}`);
+    setReview(null);
+    setPayment((current) => ({ ...current, pin: "", confirmed: false }));
     complete(agentMode ? "Marquer paiement" : "Payer taxe", taxPayment.data.id, paid.live ? "Taxe preparee sur le serveur, en attente de confirmation du prestataire." : "Taxe de demonstration payee et recu municipal genere.");
   };
 
@@ -223,8 +252,11 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
     </select>
   );
 
+  if (review) return <section className="mt-5 space-y-4 rounded-2xl border bg-white p-5"><h3 className="text-xl font-bold">Verifier avant confirmation</h3><p>{review.merchant.name} · {review.merchant.id}</p><p>Periode : {payment.periodLabel} · Montant : {review.amount.toFixed(2)} USD</p><p>{review.agentMode ? "Declaration locale de collecte uniquement : aucun encaissement ni quitus fiscal confirme." : "Preparation Payflow uniquement : aucune taxe acquittee par cette etape."}</p><button disabled={busy} onClick={() => processTaxPayment(review.agentMode, true)} className="rounded bg-omgGreen p-3 text-white">{busy ? "Traitement…" : "Confirmer"}</button><button disabled={busy} onClick={() => setReview(null)} className="ml-3 rounded border p-3">Modifier / annuler</button>{notice && <p role="alert">{notice}</p>}</section>;
+
   return (
     <div className="mt-5 space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 text-amber-900">Donnees locales : aucun statut fiscal, retard, encaissement ou audit inviolable certifie. Les anciens statuts PAYE ne constituent pas une preuve serveur.</p>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-omgGold/40 bg-slate-950 p-4 text-white">
         <div><strong className="text-omgGold">Assistant City</strong><p className="text-sm text-slate-300">Prepare et calcule · confirmation humaine obligatoire</p></div>
         <button type="button" onClick={prepareWithAssistant} className="rounded bg-omgGold px-4 py-2 font-black text-black">Preparer avec l'assistant</button>
@@ -273,9 +305,9 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
         <Section title={mode === "agent-payment" ? "Marquer un paiement collecte" : "Payer la taxe municipale"}>
           {mode === "agent-payment" ? <MerchantSelector /> : <p className="mt-4 rounded-xl bg-slate-50 p-4 font-bold">{currentMerchant ? `${currentMerchant.name} · ${currentMerchant.id}` : "Aucun dossier marchand associe."}</p>}
           <div className="mt-3 grid gap-3 md:grid-cols-2"><input placeholder="Periode fiscale" className="rounded border p-3" value={payment.periodLabel} onChange={(e) => setPayment({ ...payment, periodLabel: e.target.value })} /><input aria-label="Montant" type="number" min="0" className="rounded border p-3" value={payment.amount} onChange={(e) => setPayment({ ...payment, amount: e.target.value })} /></div>
-          {mode === "tax-payment" && <><select className="mt-3 w-full rounded border p-3" value={payment.method} onChange={(e) => setPayment({ ...payment, method: e.target.value })}><option>Payflow</option><option>Carte bancaire</option><option>Cash</option></select>{payment.method === "Payflow" && <input placeholder="PIN Payflow" maxLength="4" className="mt-3 w-full rounded border p-3" value={payment.pin} onChange={(e) => setPayment({ ...payment, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />}</>}
+          {mode === "tax-payment" && <p className="mt-3 text-sm">Preparation avec Payflow. Aucun PIN requis a cette etape. Carte et cash non connectes ici.</p>}
           <label className="mt-3 flex gap-2"><input type="checkbox" checked={payment.confirmed} onChange={(e) => setPayment({ ...payment, confirmed: e.target.checked })} /> Je confirme le marchand, la periode et le montant.</label>
-          <button type="button" onClick={() => processTaxPayment(mode === "agent-payment")} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Confirmer le paiement</button>
+          <p className="mt-3 text-sm">Indiquez une periode datee, par exemple « Mars 2027 », et non seulement « Mois ».</p><button type="button" disabled={busy} onClick={() => processTaxPayment(mode === "agent-payment")} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Verifier la demande</button>
         </Section>
       )}
 
@@ -295,7 +327,7 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
 
       {mode === "reports" && (
         <Section title="Rapports municipaux">
-          <div className="mt-4 grid gap-3 md:grid-cols-4"><div className="rounded-xl bg-slate-50 p-4"><strong>Marchands</strong><p className="text-2xl font-black">{merchants.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Zones</strong><p className="text-2xl font-black">{zones.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Paiements</strong><p className="text-2xl font-black">{cityPayments.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Collecte</strong><p className="text-2xl font-black">{cityPayments.reduce((sum, item) => sum + Number(item.amount || 0), 0).toFixed(2)} USD</p></div></div>
+          <div className="mt-4 grid gap-3 md:grid-cols-4"><div className="rounded-xl bg-slate-50 p-4"><strong>Marchands accessibles</strong><p>{merchants.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Zones accessibles</strong><p>{zones.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Operations locales</strong><p>{cityPayments.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Collecte reelle</strong><p>Non verifiee</p></div></div>
         </Section>
       )}
 
@@ -305,7 +337,7 @@ function CityWorkspace({ selectedAction, profile, closeModuleAction }) {
         </Section>
       )}
 
-      {(notice || reference) && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 font-bold text-emerald-900">{notice}{reference && <div className="mt-1 text-sm">Reference : {reference}</div>}</div>}
+      {(notice || reference) && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 font-bold text-emerald-900">{notice}{reference && <div className="mt-1 text-sm">Reference : {reference}</div>}{profile?.userType === "Marchand" && <Link to="/city-administration/history" className="mt-3 block underline">Consulter mon historique</Link>}</div>}
       <button type="button" onClick={closeModuleAction} className="rounded border border-slate-300 px-4 py-2 font-bold text-slate-700">Retour au menu</button>
     </div>
   );

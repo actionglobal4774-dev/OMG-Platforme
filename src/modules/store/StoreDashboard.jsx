@@ -1,7 +1,8 @@
 import React from "react";
 import ModuleDashboardTemplate from "../../components/modules/ModuleDashboardTemplate";
 import { getModuleById } from "../../data/modules";
-import StoreWorkspace, { StorePublicCatalog } from "./StoreWorkspace";
+import { StorePublicCatalog } from "./StoreWorkspace";
+import ModuleActionDestination from "../../components/modules/ModuleActionDestination";
 
 function StoreDashboard() {
   const module = getModuleById("store");
@@ -12,8 +13,8 @@ function StoreDashboard() {
       menuActions={module.actions}
       suppressCompactActionFooter
       publicEntryContent={({ onCreateProfile }) => <StorePublicCatalog onCreateProfile={onCreateProfile} />}
-      renderCompactAction={({ selectedAction, profile, closeModuleAction }) => (
-        <StoreWorkspace selectedAction={selectedAction} profile={profile} closeModuleAction={closeModuleAction} />
+      renderCompactAction={({ selectedAction }) => (
+        <ModuleActionDestination moduleId="store" action={selectedAction} />
       )}
     />
   );

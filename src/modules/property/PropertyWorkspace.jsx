@@ -1,4 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
+import { isDemoMode } from "../../services/runtimePolicy";
+import { ownsProperty, validatePropertyContract } from "./propertyJourney";
+import { validPropertyDate, validatePropertyDraft, validatePropertyMedia } from "./propertyFormValidation";
+import { Link } from "react-router-dom";
 import {
   getCollection,
   saveCollection,
@@ -31,22 +35,27 @@ function getMode(action) {
   return "search";
 }
 
-function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
-  const mode = getMode(selectedAction);
+function PropertyWorkspace({ selectedAction, profile, closeModuleAction, pageSection, initialReference = "" }) {
+  const mode = selectedAction === "Rechercher" && ["details", "map"].includes(pageSection) ? pageSection : getMode(selectedAction);
   const [properties, setProperties] = useState(() => {
     const saved = getCollection("properties");
-    return saved.length ? saved : starterProperties;
+    return saved.length ? saved : isDemoMode ? starterProperties : [];
   });
   const [filters, setFilters] = useState({ country: "", city: "", street: "", postalCode: "", maxPrice: "" });
   const [draft, setDraft] = useState({ title: "", country: profile?.country || "", city: "", street: "", postalCode: "", type: "House", bedrooms: "", bathrooms: "", price: "", currency: "USD", description: "" });
-  const [media, setMedia] = useState({ propertyId: "", fileName: "", mediaType: "photo" });
-  const [availability, setAvailability] = useState({ propertyId: "", available: "yes", date: "" });
-  const [contract, setContract] = useState({ propertyId: "", tenant: "", startDate: "", endDate: "", amount: "", confirmed: false });
-  const [payment, setPayment] = useState({ propertyId: "", amount: "", method: "Payflow", pin: "", confirmed: false });
+  const [media, setMedia] = useState({ propertyId: initialReference, fileName: "", mediaType: "photo" });
+  const [availability, setAvailability] = useState({ propertyId: initialReference, available: "yes", date: "" });
+  const [contract, setContract] = useState({ propertyId: initialReference, tenant: "", startDate: "", endDate: "", amount: "", confirmed: false });
+  const [payment, setPayment] = useState({ propertyId: initialReference, amount: "", method: "Payflow", pin: "", confirmed: false });
   const [compareIds, setCompareIds] = useState([]);
   const [favorites, setFavorites] = useState(() => getCollection("favorites_property"));
   const [notice, setNotice] = useState("");
   const [reference, setReference] = useState("");
+  const [review, setReview] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const [mediaFile, setMediaFile] = useState(null);
+  const ownedProperties = properties.filter((item) => ownsProperty(item, profile));
 
   const visibleProperties = useMemo(() => properties.filter((item) => {
     const maxPrice = Number(filters.maxPrice);
@@ -63,7 +72,7 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
     saveModuleActivity("property", {
       action,
       reference: nextReference,
-      status: "confirmed",
+      status: "prepared",
       profile: { email: profile?.email, userType: profile?.userType, country: profile?.country }
     });
     setReference(nextReference);
@@ -71,6 +80,9 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const publish = () => {
+    const validation = validatePropertyDraft(draft);
+    if (validation) { setNotice(validation); return; }
+    if (draft.id && !ownedProperties.some((item) => item.id === draft.id)) { setNotice("Modification non autorisee."); return; }
     const price = Number(draft.price);
     if (!draft.title.trim() || !draft.country.trim() || !draft.city.trim() || !draft.street.trim() || !Number.isFinite(price) || price <= 0) {
       setNotice("Titre, pays, ville, rue et prix valide sont obligatoires.");
@@ -81,16 +93,19 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
       price,
       bedrooms: Number(draft.bedrooms || 0),
       bathrooms: Number(draft.bathrooms || 0),
-      available: true,
+      available: draft.available ?? true,
       owner: profile?.email
     });
     const next = [result.data, ...properties.filter((item) => item.id !== result.data.id)];
     setProperties(next);
     saveCollection("properties", next);
-    complete("Publier bien", result.data.id, "Bien immobilier publie.");
+    complete("Publier bien", result.data.id, "Bien enregistre localement. Publication publique non confirmee par le serveur.");
   };
 
   const saveMedia = () => {
+    const validation = validatePropertyMedia(mediaFile, media.mediaType);
+    if (validation) { setNotice(validation); return; }
+    if (!ownsProperty(properties.find((item) => item.id === media.propertyId), profile)) { setNotice("Choisissez votre propre bien."); return; }
     if (!media.propertyId || !media.fileName) {
       setNotice("Choisissez un bien et un fichier photo ou video.");
       return;
@@ -100,10 +115,12 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
       : item);
     setProperties(next);
     saveCollection("properties", next);
-    complete("Ajouter media", `PROPERTY-MEDIA-${Date.now()}`, "Photo ou video rattachee au bien.");
+    complete("Ajouter media", `PROPERTY-MEDIA-${Date.now()}`, "Nom de fichier enregistre localement ; fichier non televerse.");
   };
 
   const saveAvailability = () => {
+    if (availability.date && !validPropertyDate(availability.date)) { setNotice("Date de disponibilite invalide."); return; }
+    if (!ownsProperty(properties.find((item) => item.id === availability.propertyId), profile)) { setNotice("Choisissez votre propre bien."); return; }
     if (!availability.propertyId) {
       setNotice("Choisissez un bien.");
       return;
@@ -111,10 +128,12 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
     const next = properties.map((item) => item.id === availability.propertyId ? { ...item, available: availability.available === "yes", availableDate: availability.date } : item);
     setProperties(next);
     saveCollection("properties", next);
-    complete("Disponibilite", availability.propertyId, "Disponibilite du bien mise a jour.");
+    complete("Disponibilite", availability.propertyId, "Disponibilite mise a jour localement, non confirmee par le serveur.");
   };
 
   const saveContract = () => {
+    const validation = validatePropertyContract(contract, properties.find((item) => item.id === contract.propertyId), profile);
+    if (validation) { setNotice(validation); return; }
     if (!contract.propertyId || !contract.tenant.trim() || !contract.startDate || !contract.endDate || Number(contract.amount) <= 0) {
       setNotice("Bien, locataire, dates et montant sont obligatoires.");
       return;
@@ -127,18 +146,17 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
       setNotice("Confirmez les informations du contrat.");
       return;
     }
-    const result = upsertItem("property_contracts", { ...contract, owner: profile?.email, status: "signed-locally" });
-    complete("Contrat numerique", result.data.id, "Contrat numerique prepare et enregistre.");
+    const result = upsertItem("property_contracts", { ...contract, owner: profile?.email, status: "draft" });
+    complete("Contrat numerique", result.data.id, "Brouillon de contrat enregistre. Aucune signature electronique ni validation juridique effectuee.");
   };
 
-  const payOwner = async () => {
+  const payOwner = async (confirmed = false) => {
+    if (pending.current) return;
+    const property = properties.find((item) => item.id === payment.propertyId);
+    if (!property || !property.available || ownsProperty(property, profile)) { setNotice("Choisissez un bien disponible appartenant a un autre proprietaire."); return; }
     const amount = Number(payment.amount);
     if (!payment.propertyId || !Number.isFinite(amount) || amount <= 0) {
       setNotice("Choisissez un bien et entrez un montant valide.");
-      return;
-    }
-    if (!/^\d{4}$/.test(payment.pin)) {
-      setNotice("Entrez un PIN Payflow a 4 chiffres.");
       return;
     }
     if (!payment.confirmed) {
@@ -146,10 +164,17 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
       return;
     }
     const fee = amount * 0.0499;
+    if (!confirmed) { setNotice(""); setReference(""); setReview(true); return; }
+    pending.current = true;
+    setBusy(true);
     try {
-      const result = await prepareModulePayment({ moduleId: "property", action: "Payer proprietaire", amount, currency: "USD", label: "Property owner payment", method: payment.method, propertyId: payment.propertyId, platformFee: fee });
-      complete("Payer proprietaire", result.data.id, result.live ? `Paiement prepare sur le serveur. Commission plateforme : ${fee.toFixed(2)} USD.` : `Paiement de demonstration prepare. Commission plateforme : ${fee.toFixed(2)} USD.`);
+      const result = await prepareModulePayment({ moduleId: "property", action: "Payer proprietaire", amount, currency: property.currency, label: "Property owner payment", method: payment.method, propertyId: payment.propertyId, platformFee: fee });
+      if (!result.ok) throw new Error(result.error || "Preparation impossible.");
+      complete("Payer proprietaire", result.data.id, result.live ? `Paiement prepare sur le serveur en ${property.currency}. Aucun paiement au proprietaire confirme.` : `Demonstration uniquement en ${property.currency}. Aucun paiement reel.`);
+      setReview(false);
+      setPayment((current) => ({ ...current, pin: "", confirmed: false }));
     } catch (error) { setNotice(error?.message || "Paiement proprietaire impossible."); }
+    finally { pending.current = false; setBusy(false); }
   };
 
   const togglePropertyFavorite = (item) => {
@@ -170,6 +195,7 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
           <p className="mt-1 text-sm text-slate-600">{item.bedrooms} ch. · {item.bathrooms} sdb · {item.available ? "Disponible" : "Indisponible"}</p>
           <p className="mt-3 text-xl font-black text-omgGreen">{Number(item.price).toLocaleString()} {item.currency}</p>
           <div className="mt-3 flex flex-wrap gap-2">
+            <Link to={`/property/details?reference=${encodeURIComponent(item.id)}`} className="rounded border px-3 py-2 text-sm font-bold text-omgGreen">Voir le bien</Link>
             {allowFavorite && <button type="button" onClick={() => togglePropertyFavorite(item)} className="rounded border border-omgGreen px-3 py-2 text-sm font-bold text-omgGreen">{favorites.some((fav) => fav.id === item.id) ? "Retirer favori" : "Ajouter favori"}</button>}
             {allowCompare && <button type="button" onClick={() => toggleCompare(item.id)} className="rounded border border-slate-300 px-3 py-2 text-sm font-bold text-slate-700">{compareIds.includes(item.id) ? "Retirer comparaison" : "Comparer"}</button>}
           </div>
@@ -178,8 +204,13 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
     </div>
   );
 
+  if (review) return <section className="mt-5 space-y-4 rounded-2xl border bg-white p-5"><h3 className="text-xl font-bold">Verifier la preparation du paiement</h3><p>Bien : {payment.propertyId}</p><p>Montant : {Number(payment.amount).toFixed(2)} {properties.find((item) => item.id === payment.propertyId)?.currency}</p><p>Commission indicative : {(Number(payment.amount) * 0.0499).toFixed(2)} (4,99 %). Le serveur determine les frais definitifs.</p><p>Cette etape prepare une demande, elle ne confirme pas un versement.</p><button disabled={busy} onClick={() => payOwner(true)} className="rounded bg-omgGreen p-3 text-white">{busy ? "Preparation…" : "Confirmer la preparation"}</button><button disabled={busy} onClick={() => setReview(false)} className="ml-3 rounded border p-3">Modifier / annuler</button>{notice && <p role="alert">{notice}</p>}</section>;
+
   return (
     <div className="mt-5 space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 text-amber-900">Catalogue et modifications locaux : disponibilite, publication, signature et revenus reels restent a verifier avec le serveur. Les biens exemples ne sont pas des offres verifiees.</p>
+      {mode === "details" && <section className="rounded-2xl border bg-white p-5 text-slate-800">{properties.find((item) => item.id === initialReference) ? (() => { const item = properties.find((entry) => entry.id === initialReference); return <><h2 className="text-2xl font-black">{item.title}</h2><p className="mt-3">{item.street}, {item.city}, {item.country} · {item.postalCode}</p><p>{item.bedrooms} chambres · {item.bathrooms} salles de bain</p><p className="mt-3 font-bold">{item.price} {item.currency}</p><p className="mt-3">{item.description || "Aucune description complémentaire."}</p><Link className="mt-4 inline-block font-bold text-omgGreen" to={`/property/contact?task=Payer%20proprietaire&reference=${encodeURIComponent(item.id)}`}>Préparer un paiement pour ce bien</Link></>; })() : <><h2 className="font-black">Sélectionnez un bien</h2><Link to="/property/search" className="mt-3 inline-block text-omgGreen">Revenir à la recherche</Link></>}</section>}
+      {mode === "map" && <section className="rounded-2xl border bg-white p-5 text-slate-800"><h2 className="text-xl font-black">Localisation des biens</h2><p className="mt-2">L'affichage cartographique reste à connecter. Consultez les adresses et les fiches disponibles.</p><PropertyCards allowCompare={false} /></section>}
       {mode === "search" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-lg font-black text-slate-900">Recherche immobiliere</h3>
@@ -199,13 +230,15 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
       {mode === "publish" && (
         <section className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-lg font-black text-slate-900">Publier un bien</h3>
+          {draft.id && <button className="mt-3 rounded border p-2" onClick={() => setDraft({ title: "", country: profile?.country || "", city: "", street: "", postalCode: "", type: "House", bedrooms: "", bathrooms: "", price: "", currency: "USD", description: "", authorized: false })}>Commencer une nouvelle annonce</button>}
+          <label className="mt-3 block">Reprendre un de mes biens<select aria-label="Bien a modifier" className="mt-2 w-full rounded border p-3" value={draft.id || ""} onChange={(event) => { const item = ownedProperties.find((entry) => entry.id === event.target.value); if (item) { setDraft({ ...item, authorized: false }); setNotice("Bien charge pour modification locale."); } }}><option value="">Nouvelle annonce</option>{ownedProperties.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             {["title", "country", "city", "street", "postalCode", "bedrooms", "bathrooms", "price"].map((field) => <input key={field} className="rounded border p-3" type={["bedrooms", "bathrooms", "price"].includes(field) ? "number" : "text"} value={draft[field]} onChange={(e) => setDraft({ ...draft, [field]: e.target.value })} placeholder={{ title: "Titre", country: "Pays", city: "Ville", street: "Rue", postalCode: "Code postal", bedrooms: "Chambres", bathrooms: "Salles de bain", price: "Prix" }[field]} />)}
             <select className="rounded border p-3" value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}><option>House</option><option>Apartment</option><option>Land</option><option>Commercial</option></select>
             <select className="rounded border p-3" value={draft.currency} onChange={(e) => setDraft({ ...draft, currency: e.target.value })}><option>USD</option><option>EUR</option><option>HTG</option></select>
             <textarea className="rounded border p-3 md:col-span-2" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Description" />
           </div>
-          <button type="button" onClick={publish} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Publier le bien</button>
+          <label className="mt-3 flex gap-2"><input type="checkbox" checked={Boolean(draft.authorized)} onChange={(event) => setDraft({ ...draft, authorized: event.target.checked })} />Je confirme mon droit de publier ou modifier ce bien.</label><p className="mt-2 text-sm">Indiquez 0 pour les pieces absentes. Aucun enregistrement local ne garantit la publication publique.</p><button type="button" onClick={publish} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">{draft.id ? "Enregistrer les modifications" : "Enregistrer le nouveau bien"}</button>
         </section>
       )}
 
@@ -214,7 +247,7 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
           <h3 className="text-lg font-black text-slate-900">Photos et videos du bien</h3>
           <select className="mt-4 w-full rounded border p-3" value={media.propertyId} onChange={(e) => setMedia({ ...media, propertyId: e.target.value })}><option value="">Choisir un bien</option>{properties.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
           <select className="mt-3 w-full rounded border p-3" value={media.mediaType} onChange={(e) => setMedia({ ...media, mediaType: e.target.value })}><option value="photo">Photo</option><option value="video">Video</option></select>
-          <label className="mt-3 block rounded border border-dashed p-3 text-slate-700">{media.fileName || "Choisir un fichier"}<input type="file" accept="image/*,video/*" className="sr-only" onChange={(e) => setMedia({ ...media, fileName: e.target.files?.[0]?.name || "" })} /></label>
+          <label className="mt-3 block rounded border border-dashed p-3 text-slate-700">{media.fileName || "Choisir un fichier"}<input type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" className="sr-only" onChange={(e) => { setMediaFile(e.target.files?.[0] || null); setMedia({ ...media, fileName: e.target.files?.[0]?.name || "" }); }} /></label><p className="mt-2 text-sm">Photo : JPG/PNG/WebP, 5 Mo maximum. Video : MP4/WebM, 50 Mo maximum. Classement local uniquement, sans televersement.</p>
           <button type="button" onClick={saveMedia} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer le media</button>
         </section>
       )}
@@ -251,15 +284,15 @@ function PropertyWorkspace({ selectedAction, profile, closeModuleAction }) {
           <div className="mt-3 grid gap-3 md:grid-cols-3">
             <input className="rounded border p-3" type="number" min="0" placeholder="Montant" value={payment.amount} onChange={(e) => setPayment({ ...payment, amount: e.target.value })} />
             <select className="rounded border p-3" value={payment.method} onChange={(e) => setPayment({ ...payment, method: e.target.value })}><option>Payflow</option><option>Carte bancaire</option><option>Banque</option></select>
-            <input className="rounded border p-3" type="password" inputMode="numeric" maxLength="4" placeholder="PIN Payflow" value={payment.pin} onChange={(e) => setPayment({ ...payment, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />
+            <p className="p-3 text-sm text-slate-600">Aucun PIN requis pour preparer une demande.</p>
           </div>
           <div className="mt-3 rounded-xl bg-slate-50 p-3 text-slate-700">Commission plateforme : 4.99%</div>
           <label className="mt-3 flex gap-3 rounded-xl border p-3 text-slate-700"><input type="checkbox" checked={payment.confirmed} onChange={(e) => setPayment({ ...payment, confirmed: e.target.checked })} /><span>Je confirme le bien, le montant et les frais.</span></label>
-          <button type="button" onClick={payOwner} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Payer le proprietaire</button>
+          <button type="button" onClick={() => payOwner()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Verifier la demande de paiement</button>
         </section>
       )}
 
-      {mode === "income" && <section className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="text-lg font-black text-slate-900">Paiements recus</h3><div className="mt-4 text-3xl font-black text-omgGreen">{propertyIncome.reduce((sum, item) => sum + Number(item.amount || 0), 0).toFixed(2)} USD</div><div className="mt-4 space-y-3">{propertyIncome.length ? propertyIncome.map((item) => <div key={item.id} className="rounded-xl bg-slate-50 p-3 text-slate-700">{item.id} · {item.amount} {item.currency}</div>) : <div className="rounded-xl bg-slate-50 p-4 text-slate-600">Aucun paiement recu.</div>}</div></section>}
+      {mode === "income" && <section className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="text-lg font-black text-slate-900">Historique local des preparations et simulations</h3><p className="mt-3">Ces lignes ne prouvent pas un versement recu. Aucun total de revenus reels disponible.</p><div className="mt-4 space-y-3">{propertyIncome.length ? propertyIncome.map((item) => <div key={item.id} className="rounded-xl bg-slate-50 p-3 text-slate-700">{item.id} · {item.amount} {item.currency} · non verifie</div>) : <div className="rounded-xl bg-slate-50 p-4 text-slate-600">Aucune preparation locale.</div>}</div></section>}
 
       {notice && <div className="rounded-xl border border-green-200 bg-green-50 p-4 text-sm font-semibold text-green-900">{notice}{reference && <div className="mt-2">Reference : {reference}</div>}</div>}
       <button type="button" onClick={closeModuleAction} className="rounded border border-slate-300 px-5 py-3 font-bold text-slate-700">Retour au menu</button>

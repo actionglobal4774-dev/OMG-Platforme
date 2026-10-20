@@ -1,4 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { isDemoMode } from "../../services/runtimePolicy";
+import { validateHealthAppointment, validateHealthPayment, validateHealthShare } from "./healthJourney";
+import { validateHealthPrescription, validateHealthVitals } from "./healthFormValidation";
 import {
   changeAppointment,
   generateReceipt,
@@ -67,16 +71,19 @@ function getMode(action) {
   return "record";
 }
 
-function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
+function HealthWorkspace({ selectedAction, profile, closeModuleAction, initialReference = "" }) {
   const mode = getMode(selectedAction);
   const [search, setSearch] = useState({ city: "", specialty: "" });
   const [appointment, setAppointment] = useState({ providerId: "", service: "Consultation", type: "Sur place", date: "", time: "", consent: false });
   const [clinical, setClinical] = useState({ patientRef: "", summary: "", details: "", consent: false });
-  const [vitals, setVitals] = useState({ patientRef: "", temperature: "", pulse: "", pressure: "" });
+  const [vitals, setVitals] = useState({ patientRef: "", temperature: "", temperatureUnit: "C", pulse: "", pressure: "" });
   const [prescription, setPrescription] = useState({ patientRef: "", medication: "", dosage: "", duration: "" });
   const [lab, setLab] = useState({ patientRef: "", test: "", result: "", reviewed: false });
   const [session, setSession] = useState({ name: "", email: "", role: "Medecin", license: "" });
-  const [payment, setPayment] = useState({ appointmentId: "", pin: "", confirmed: false });
+  const [payment, setPayment] = useState({ appointmentId: initialReference, confirmed: false });
+  const [review, setReview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
   const [emergency, setEmergency] = useState({ patientRef: "", reason: "", confirmed: false });
   const [insurance, setInsurance] = useState({ prescriptionId: "", coverage: "", decision: "approved" });
   const [dispense, setDispense] = useState({ prescriptionId: "", allergyChecked: false, interactionChecked: false, confirmed: false });
@@ -98,7 +105,7 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
   const labCatalog = getCollection("health_lab_catalog");
   const isPatient = profile?.userType === "Patient";
   const patientReference = normalize(profile?.email);
-  const belongsToPatient = (item) => normalize(item.patientRef || item.patient) === patientReference;
+  const belongsToPatient = (item) => Boolean(patientReference) && normalize(item.patientRef || item.patient) === patientReference;
   const visiblePrescriptions = isPatient ? prescriptions.filter(belongsToPatient) : prescriptions;
   const visibleLabResults = isPatient ? labResults.filter(belongsToPatient) : labResults;
   const visibleRecords = isPatient ? records.filter(belongsToPatient) : records;
@@ -135,7 +142,7 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
     action, patientRef, actor: profile?.email, role: profile?.userType || "Unknown", outcome, occurredAt: new Date().toISOString()
   });
 
-  const filteredProviders = useMemo(() => providers.filter((item) => {
+  const filteredProviders = useMemo(() => (isDemoMode ? providers : []).filter((item) => {
     const cityOk = !search.city || normalize(item.city).includes(normalize(search.city));
     const specialtyOk = !search.specialty || normalize(item.specialty).includes(normalize(search.specialty));
     return cityOk && specialtyOk;
@@ -145,15 +152,17 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
     saveModuleActivity("health", {
       action,
       reference: nextReference,
-      status: "confirmed",
+      status: "prepared",
       profile: { email: profile?.email, userType: profile?.userType, country: profile?.country }
     });
     setReference(nextReference);
-    setNotice(message);
+    setNotice(`${message} Enregistrement local : transmission et validation metier serveur non garanties.`);
   };
 
-  const bookAppointment = () => {
-    const provider = providers.find((item) => item.id === appointment.providerId);
+  const bookAppointment = (confirmed = false) => {
+    const provider = isDemoMode ? providers.find((item) => item.id === appointment.providerId) : null;
+    const validation = validateHealthAppointment(appointment, provider, appointments, profile?.email);
+    if (validation) { setNotice(validation); return; }
     if (!provider || !appointment.date || !appointment.time || !appointment.consent) {
       setNotice("Professionnel, date, heure et consentement sont obligatoires.");
       return;
@@ -162,7 +171,8 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
       setNotice("Le rendez-vous doit etre dans le futur.");
       return;
     }
-    const result = saveAppointment({
+    if (!confirmed) { setNotice(""); setReview({ kind: "appointment", provider }); return; }
+    const result = persistHealthItem("appointments", {
       provider: provider.name,
       providerId: provider.id,
       patient: profile?.email,
@@ -172,29 +182,37 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
       time: appointment.time,
       price: provider.price,
       currency: "USD",
-      paymentStatus: "required"
+      paymentStatus: "required",
+      status: "requested"
     });
     if (result.ok) void upsertCloudItem("health", "appointments", result.data).catch(() => null);
-    complete("Rendez-vous sante", result.data.id, "Rendez-vous confirme. Paiement disponible.");
+    setReview(null);
+    complete("Rendez-vous sante", result.data.id, "Demande de demonstration enregistree. Aucun creneau professionnel garanti.");
   };
 
-  const payAppointment = async () => {
+  const payAppointment = async (confirmed = false) => {
+    if (pending.current) return;
     const item = appointments.find((entry) => entry.id === payment.appointmentId);
+    const validation = validateHealthPayment(item, profile?.email, payment.confirmed);
+    if (validation) { setNotice(validation); return; }
     if (!item) {
       setNotice("Choisissez un rendez-vous.");
       return;
     }
-    if (!/^\d{4}$/.test(payment.pin) || !payment.confirmed) {
-      setNotice("PIN Payflow a 4 chiffres et confirmation obligatoires.");
-      return;
-    }
+    if (!confirmed) { setNotice(""); setReview({ kind: "payment", item }); return; }
+    pending.current = true;
+    setBusy(true);
     let paid;
     try { paid = await prepareModulePayment({ moduleId: "health", action: "Consultation medecin", amount: item.price, currency: item.currency || "USD", label: "Health Service", method: "Payflow" }); }
     catch (error) { setNotice(error?.message || "Preparation du paiement sante impossible."); return; }
-    const changed = changeAppointment(item.id, item.status, { paymentStatus: paid.live ? "payment_prepared" : "paid", paymentId: paid.data.id });
+    finally { pending.current = false; setBusy(false); }
+    if (!paid.ok) { setNotice(paid.error || "Preparation impossible."); return; }
+    const changed = changeAppointment(item.id, item.status, { paymentStatus: paid.live ? "payment_prepared" : "simulated", paymentId: paid.data.id });
     if (changed.ok) void upsertCloudItem("health", "appointments", changed.data).catch(() => null);
     if (!paid.live) generateReceipt(paid.data);
     complete("Paiement sante", paid.data.id, paid.live ? "Paiement sante prepare, en attente de confirmation. Aucune donnee clinique n'est transmise a Payflow." : "Service de demonstration paye.");
+    setReview(null);
+    setPayment((current) => ({ ...current, confirmed: false }));
   };
 
   const saveClinicalRecord = (scope) => {
@@ -211,10 +229,12 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
       author: profile?.email,
       access: scope === "psychology" ? ["Psychologue"] : ["Medecin", "Infirmier"]
     });
-    complete(scope === "psychology" ? "Note psychologue protegee" : "Dossier clinique", result.data.id, scope === "psychology" ? "Note enregistree dans l'espace protege." : "Dossier clinique enregistre.");
+    complete(scope === "psychology" ? "Note psychologue protegee" : "Dossier clinique", result.data.id, "Note locale enregistree. Confidentialite et autorisation clinique non certifiees.");
   };
 
   const saveVitals = () => {
+    const validation = validateHealthVitals(vitals, profile?.userType);
+    if (validation) { setNotice(validation); return; }
     if (!vitals.patientRef.trim() || !vitals.temperature || !vitals.pulse || !vitals.pressure.trim()) {
       setNotice("Reference patient et tous les signes vitaux sont obligatoires.");
       return;
@@ -224,13 +244,15 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const savePrescription = () => {
+    const validation = validateHealthPrescription(prescription, profile?.userType);
+    if (validation) { setNotice(validation); return; }
     if (!prescription.patientRef.trim() || !prescription.medication.trim() || !prescription.dosage.trim() || !prescription.duration.trim()) {
       setNotice("Patient, medicament, dosage et duree sont obligatoires.");
       return;
     }
-    const result = persistHealthItem("health_prescriptions", { ...prescription, prescriber: profile?.email, status: "active", insuranceStatus: "not_requested" });
+    const result = persistHealthItem("health_prescriptions", { ...prescription, prescriber: profile?.email, status: "draft", insuranceStatus: "not_requested" });
     audit("prescription_created", prescription.patientRef);
-    complete("Ordonnance", result.data.id, "Ordonnance enregistree.");
+    complete("Ordonnance", result.data.id, "Brouillon uniquement : ordonnance non signee, non utilisable pour delivrance.");
   };
 
   const saveLab = () => {
@@ -241,7 +263,7 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
     const catalogEntry = labCatalog.find((entry) => normalize(entry.name) === normalize(lab.test) || entry.code === lab.test);
     const result = persistHealthItem("health_lab_results", { ...lab, laboratory: profile?.email, status: "available", referenceRange: catalogEntry?.referenceRange || "Not configured", criticalRange: catalogEntry?.criticalRange || "Not configured" });
     audit("lab_result_published", lab.patientRef);
-    complete("Resultat laboratoire", result.data.id, "Resultat publie au patient.");
+    complete("Resultat laboratoire", result.data.id, "Resultat enregistre localement. Publication au patient non confirmee.");
   };
 
   const saveSession = () => {
@@ -249,8 +271,8 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
       setNotice("Nom, email valide et numero de licence sont obligatoires.");
       return;
     }
-    const result = persistHealthItem("health_staff", { ...session, institution: profile?.email, status: "active", leastPrivilege: true });
-    complete("Session employe", result.data.id, "Session creee avec acces limite au role.");
+    const result = persistHealthItem("health_staff", { ...session, institution: profile?.email, status: "requested" });
+    complete("Session employe", result.data.id, "Demande de fiche employe enregistree ; aucun compte ni droit serveur accorde.");
   };
 
   const requestEmergencyAccess = () => {
@@ -258,9 +280,9 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
       setNotice("Patient, justification et confirmation sont obligatoires pour l'acces d'urgence."); return;
     }
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    const result = persistHealthItem("health_emergency_access", { ...emergency, requester: profile?.email, requesterRole: profile?.userType, status: "temporary_active", expiresAt, requestedAt: new Date().toISOString() });
-    audit("emergency_access_granted", emergency.patientRef);
-    complete("Acces urgence temporaire", result.data.id, "Acces d'urgence active pour 60 minutes et inscrit au journal d'audit.");
+    const result = persistHealthItem("health_emergency_access", { ...emergency, requester: profile?.email, requesterRole: profile?.userType, status: "requested", expiresAt, requestedAt: new Date().toISOString() });
+    audit("emergency_access_requested", emergency.patientRef, "pending");
+    complete("Acces urgence temporaire", result.data.id, "Demande uniquement : aucun acces medical accorde par ce formulaire.");
   };
 
   const decideInsurance = () => {
@@ -273,12 +295,7 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const confirmDispense = () => {
-    const prescriptionItem = prescriptions.find((item) => item.id === dispense.prescriptionId);
-    if (!prescriptionItem || !dispense.allergyChecked || !dispense.interactionChecked || !dispense.confirmed) { setNotice("Prescription, controles allergies/interactions et validation finale sont obligatoires."); return; }
-    const result = persistHealthItem("health_pharmacy_dispenses", { ...dispense, patientRef: prescriptionItem.patientRef, pharmacist: profile?.email, dispensedAt: new Date().toISOString() });
-    persistHealthItem("health_prescriptions", { ...prescriptionItem, status: "dispensed", pharmacist: profile?.email });
-    audit("pharmacy_dispense", prescriptionItem.patientRef);
-    complete("Delivrance pharmacie", result.data.id, "Delivrance validee : seules les donnees utiles au traitement ont ete utilisees.");
+    setNotice("Delivrance non connectee : une ordonnance signee et une autorisation patient/pharmacie doivent etre verifiees par le serveur. Aucune delivrance enregistree.");
   };
 
   const saveCatalogTest = () => {
@@ -288,9 +305,11 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const saveSecureShare = () => {
+    const validation = validateHealthShare(share, profile?.email, isPatient);
+    if (validation) { setNotice(validation); return; }
     if (!share.patientRef.trim() || !share.recipient.trim() || !share.expiresAt) { setNotice("Patient, destinataire et date d'expiration sont obligatoires."); return; }
-    const result = persistHealthItem("health_secure_shares", { ...share, grantedBy: profile?.email, status: "active" });
-    audit("secure_share_granted", share.patientRef); complete("Partage securise", result.data.id, "Partage limite au perimetre et a la duree indiques.");
+    const result = persistHealthItem("health_secure_shares", { ...share, requestedBy: profile?.email, status: "requested" });
+    audit("secure_share_requested", share.patientRef, "pending"); complete("Partage securise", result.data.id, "Demande de partage uniquement : aucun acces destinataire active.");
   };
 
   const saveImagingRequest = () => {
@@ -306,8 +325,11 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
     </section>
   );
 
+  if (review) return <section className="mt-5 space-y-4 rounded-2xl border bg-white p-5"><h3 className="text-xl font-bold">Verifier avant confirmation</h3>{review.kind === "appointment" ? <><p>{review.provider.name} — professionnel exemple</p><p>{appointment.date} a {appointment.time} · {appointment.service} · {appointment.type}</p><p>Tarif indicatif : {review.provider.price} USD. Demande de demonstration, disponibilite non garantie.</p></> : <><p>Reference : {review.item.id}</p><p>Montant : {review.item.price} {review.item.currency || "USD"}</p><p>Preparation de paiement uniquement, sans confirmation de debit.</p></>}<button disabled={busy} onClick={() => review.kind === "appointment" ? bookAppointment(true) : payAppointment(true)} className="rounded bg-omgGreen p-3 text-white">{busy ? "Traitement…" : "Confirmer"}</button><button disabled={busy} onClick={() => setReview(null)} className="ml-3 rounded border p-3">Modifier / annuler</button>{notice && <p role="alert">{notice}</p>}</section>;
+
   return (
     <div className="mt-5 space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 text-amber-900">Parcours frontend en cours de validation. N'entrez pas de donnees medicales reelles : le cloisonnement serveur et la confidentialite ne sont pas certifies. Les exemples ne constituent pas des professionnels verifies.</p>
       {mode === "record" && (
         <Section title="Dossier patient">
           <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -338,14 +360,14 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
               <input aria-label="Heure" type="time" className="rounded border p-3" value={appointment.time} onChange={(e) => setAppointment({ ...appointment, time: e.target.value })} />
             </div>
             <label className="mt-3 flex gap-2"><input type="checkbox" checked={appointment.consent} onChange={(e) => setAppointment({ ...appointment, consent: e.target.checked })} /> Je consens a la creation de ce rendez-vous.</label>
-            <button type="button" onClick={bookAppointment} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Confirmer</button>
+            <button type="button" onClick={() => bookAppointment()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Verifier la demande</button>
           </Section>
           {!!appointments.filter((item) => item.patient === profile?.email && item.paymentStatus !== "paid").length && (
             <Section title="Paiement du rendez-vous">
               <select className="mt-4 w-full rounded border p-3" value={payment.appointmentId} onChange={(e) => setPayment({ ...payment, appointmentId: e.target.value })}><option value="">Choisir un rendez-vous</option>{appointments.filter((item) => item.patient === profile?.email && item.paymentStatus !== "paid").map((item) => <option key={item.id} value={item.id}>{item.provider} · {item.price} USD</option>)}</select>
-              <input placeholder="PIN Payflow" maxLength="4" className="mt-3 w-full rounded border p-3" value={payment.pin} onChange={(e) => setPayment({ ...payment, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />
+              <p className="mt-3">Aucun PIN requis pour preparer une demande.</p>
               <label className="mt-3 flex gap-2"><input type="checkbox" checked={payment.confirmed} onChange={(e) => setPayment({ ...payment, confirmed: e.target.checked })} /> Je confirme le service et son montant.</label>
-              <button type="button" onClick={payAppointment} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Payer avec Payflow</button>
+              <button type="button" onClick={() => payAppointment()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Verifier la preparation Payflow</button>
             </Section>
           )}
         </>
@@ -361,9 +383,9 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
         <Section title="Paiement Health Care">
           <p className="mt-2 text-sm text-slate-600">Les informations cliniques ne sont jamais transmises à Payflow.</p>
           <select className="mt-4 w-full rounded border p-3" value={payment.appointmentId} onChange={(e) => setPayment({ ...payment, appointmentId: e.target.value })}><option value="">Choisir un rendez-vous</option>{appointments.filter((item) => item.patient === profile?.email && item.paymentStatus !== "paid").map((item) => <option key={item.id} value={item.id}>{item.provider} · {item.price} USD</option>)}</select>
-          <input placeholder="PIN Payflow" maxLength="4" className="mt-3 w-full rounded border p-3" value={payment.pin} onChange={(e) => setPayment({ ...payment, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />
+          <p className="mt-3">Aucun PIN requis pour preparer une demande.</p>
           <label className="mt-3 flex gap-2"><input type="checkbox" checked={payment.confirmed} onChange={(e) => setPayment({ ...payment, confirmed: e.target.checked })} /> Je confirme le montant et le service.</label>
-          <button type="button" onClick={payAppointment} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Payer avec Payflow</button>
+          <button type="button" onClick={() => payAppointment()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Verifier la preparation Payflow</button>
         </Section>
       )}
 
@@ -380,14 +402,14 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
       {mode === "vitals" && (
         <Section title="Signes vitaux">
           <div className="mt-4 grid gap-3 md:grid-cols-2"><input placeholder="Reference patient" className="rounded border p-3" value={vitals.patientRef} onChange={(e) => setVitals({ ...vitals, patientRef: e.target.value })} /><input aria-label="Temperature" type="number" className="rounded border p-3" value={vitals.temperature} onChange={(e) => setVitals({ ...vitals, temperature: e.target.value })} /><input aria-label="Pouls" type="number" className="rounded border p-3" value={vitals.pulse} onChange={(e) => setVitals({ ...vitals, pulse: e.target.value })} /><input placeholder="Tension arterielle" className="rounded border p-3" value={vitals.pressure} onChange={(e) => setVitals({ ...vitals, pressure: e.target.value })} /></div>
-          <button type="button" onClick={saveVitals} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer</button>
+          <label className="mt-3 block">Unite temperature<select aria-label="Unite temperature" value={vitals.temperatureUnit} onChange={(event) => setVitals({ ...vitals, temperatureUnit: event.target.value })} className="ml-3 rounded border p-2"><option value="C">°C</option><option value="F">°F</option></select></label><p className="mt-2 text-sm">Pouls en battements/minute ; tension au format systolique/diastolique en mmHg. Controle de saisie uniquement, pas interpretation clinique.</p><button type="button" onClick={saveVitals} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer</button>
         </Section>
       )}
 
       {mode === "prescribe" && (
         <Section title="Nouvelle ordonnance">
           <div className="mt-4 grid gap-3 md:grid-cols-2"><input placeholder="Reference patient" className="rounded border p-3" value={prescription.patientRef} onChange={(e) => setPrescription({ ...prescription, patientRef: e.target.value })} /><input placeholder="Medicament" className="rounded border p-3" value={prescription.medication} onChange={(e) => setPrescription({ ...prescription, medication: e.target.value })} /><input placeholder="Dosage" className="rounded border p-3" value={prescription.dosage} onChange={(e) => setPrescription({ ...prescription, dosage: e.target.value })} /><input placeholder="Duree" className="rounded border p-3" value={prescription.duration} onChange={(e) => setPrescription({ ...prescription, duration: e.target.value })} /></div>
-          <button type="button" onClick={savePrescription} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Publier l'ordonnance</button>
+          <div className="mt-3 grid gap-3 md:grid-cols-2"><input aria-label="Voie administration" placeholder="Voie d'administration prescrite" value={prescription.route || ""} onChange={(event) => setPrescription({ ...prescription, route: event.target.value, reviewed: false })} className="rounded border p-3" /><input aria-label="Frequence prescrite" placeholder="Frequence prescrite" value={prescription.frequency || ""} onChange={(event) => setPrescription({ ...prescription, frequency: event.target.value, reviewed: false })} className="rounded border p-3" /></div><label className="mt-3 flex gap-2"><input type="checkbox" checked={Boolean(prescription.reviewed)} onChange={(event) => setPrescription({ ...prescription, reviewed: event.target.checked })} />J'ai relu le brouillon. Il ne sera pas valide pour delivrance sans signature et controle serveur.</label><button type="button" onClick={savePrescription} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer le brouillon</button>
         </Section>
       )}
 
@@ -443,7 +465,7 @@ function HealthWorkspace({ selectedAction, profile, closeModuleAction }) {
 
       {mode === "audit" && <Section title="Journal d'audit medical"><p className="mt-2 text-sm text-slate-600">Les acces et actions sensibles sont tracables dans ce frontend de demonstration.</p><div className="mt-4 space-y-2">{!auditEntries.length && <p>Aucune entree d'audit.</p>}{auditEntries.slice(0, 20).map((item) => <article key={item.id} className="rounded-xl bg-slate-50 p-3 text-sm"><strong>{item.action}</strong><p>{item.role} · {item.actor} · {item.patientRef || "sans patient"} · {item.outcome}</p></article>)}</div></Section>}
 
-      {(notice || reference) && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 font-bold text-emerald-900">{notice}{reference && <div className="mt-1 text-sm">Reference : {reference}</div>}</div>}
+      {(notice || reference) && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 font-bold text-emerald-900">{notice}{reference && <div className="mt-1 text-sm">Reference : {reference}{mode === "appointment" && <Link className="ml-3 underline" to={`/health-care/payment?reference=${encodeURIComponent(reference)}`}>Verifier la preparation du paiement</Link>}</div>}</div>}
       <button type="button" onClick={closeModuleAction} className="rounded border border-slate-300 px-4 py-2 font-bold text-slate-700">Retour au menu</button>
     </div>
   );

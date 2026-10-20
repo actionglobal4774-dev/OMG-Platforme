@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { moduleActionSections, getSectionTask, getModuleActionDestination, navigationLogicId } from "../data/moduleNavigation";
 import DashboardLayout from "../components/layout/DashboardLayout";
 import { useAuth } from "../context/AuthContext";
 import { getActionsForUserType } from "../data/moduleLogic";
@@ -71,18 +72,21 @@ function pickAction(moduleId, section, profile) {
 
 export default function RemainingModuleSectionPage({ moduleId }) {
   const { section } = useParams();
+  const [search] = useSearchParams();
   const navigate = useNavigate();
   const { getModuleProfile } = useAuth();
   const profileId = moduleId === "taxpro" ? "tax" : moduleId;
   const profile = getModuleProfile(profileId);
   const [accessPassword, setAccessPassword] = useState("");
   const [accessError, setAccessError] = useState("");
-  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [isUnlocked, setIsUnlocked] = useState("");
   const match = findModulePage(moduleId, section);
   if (!match) return <Navigate to="/not-found" replace />;
 
   const Workspace = workspaces[moduleId];
-  const action = pickAction(moduleId, section, profile);
+  const migrated = Object.hasOwn(moduleActionSections, moduleId);
+  const action = migrated ? (search.get("task") ? getSectionTask(moduleId, section, search.get("task"), profile?.userType) : getSectionTask(moduleId, section, "", profile?.userType) || pickAction(moduleId, section, profile)) : pickAction(moduleId, section, profile);
+  const roleActions = profile ? getActionsForUserType(navigationLogicId(moduleId), profile.userType, []) : [];
   const [, title, description] = match.page;
   const pages = match.module.pages;
 
@@ -91,19 +95,20 @@ export default function RemainingModuleSectionPage({ moduleId }) {
       <div className="space-y-5">
         <header>
           <Link to={match.module.basePath} className="font-bold text-omgGreen">← Tableau {match.module.name}</Link>
-          <h1 className="mt-2 text-3xl font-black text-slate-900">{title}</h1>
+          <h1 className="mt-2 text-3xl font-black text-slate-900">{search.get("task") && action ? action : title}</h1>
           <p className="mt-2 text-slate-600">{description}</p>
         </header>
         <nav aria-label={`Navigation ${match.module.name}`} className="flex gap-2 overflow-x-auto pb-2">
-          {pages.map(([slug, label]) => <Link key={slug} to={`${match.module.basePath}/${slug}`} aria-current={slug === section ? "page" : undefined} className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold ${slug === section ? "bg-omgGreen text-white" : "border bg-white text-slate-700"}`}>{label}</Link>)}
+          {pages.filter(([slug]) => !migrated || getSectionTask(moduleId, slug, "", profile?.userType) || pickAction(moduleId, slug, profile)).map(([slug, label]) => <Link key={slug} to={`${match.module.basePath}/${slug}${search.get("reference") ? `?reference=${encodeURIComponent(search.get("reference"))}` : ""}`} aria-current={slug === section ? "page" : undefined} className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold ${slug === section ? "bg-omgGreen text-white" : "border bg-white text-slate-700"}`}>{label}</Link>)}
         </nav>
+        {migrated && profile && <nav aria-label="Actions autorisées" className="flex flex-wrap gap-2">{roleActions.map((item) => <Link key={item} to={`${getModuleActionDestination(moduleId, item)}${search.get("reference") ? `&reference=${encodeURIComponent(search.get("reference"))}` : ""}`} className="rounded border bg-white px-3 py-2 text-sm text-slate-800">{item}</Link>)}</nav>}
         {!profile ? (
           <section className="rounded-2xl border bg-white p-6">
             <h2 className="text-xl font-black">Profil {match.module.name} requis</h2>
             <p className="mt-2 text-slate-600">Creez ou ouvrez votre profil pour utiliser cette fonction et appliquer les permissions de votre role.</p>
             <Link to={match.module.basePath} className="mt-4 inline-block rounded bg-omgGreen px-5 py-3 font-bold text-white">Ouvrir le module</Link>
           </section>
-        ) : profile.modulePassword && !isUnlocked ? (
+        ) : profile.modulePassword && isUnlocked !== moduleId ? (
           <form
             className="rounded-2xl border bg-white p-6"
             onSubmit={(event) => {
@@ -113,7 +118,7 @@ export default function RemainingModuleSectionPage({ moduleId }) {
                 return;
               }
               setAccessError("");
-              setIsUnlocked(true);
+              setIsUnlocked(moduleId);
             }}
           >
             <h2 className="text-xl font-black">Ouvrir l'espace {match.module.name}</h2>
@@ -129,8 +134,9 @@ export default function RemainingModuleSectionPage({ moduleId }) {
             <Link to={match.module.basePath} className="mt-4 inline-block rounded bg-slate-900 px-5 py-3 font-bold text-white">Retour au menu</Link>
           </section>
         ) : (
-          <Workspace selectedAction={action} profile={profile} closeModuleAction={() => navigate(match.module.basePath)} />
+          <Workspace key={`${moduleId}/${section}/${search.toString()}`} pageSection={section} initialReference={search.get("reference") || ""} selectedAction={action} profile={profile} closeModuleAction={() => navigate(match.module.basePath)} />
         )}
+        <Link to={match.module.basePath} className="inline-block rounded border px-4 py-2 font-bold text-omgGreen">Retour au menu du module</Link>
       </div>
     </DashboardLayout>
   );

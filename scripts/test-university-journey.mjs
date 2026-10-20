@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { allUniversityChaptersPassed, universityAnswersComplete, validateUniversityEnrollment } from '../src/modules/university/universityJourney.js';
+assert.equal(validateUniversityEnrollment(['f'], ['f'], 'student@test.org', ''), '');
+for (const ids of [[], ['unknown'], ['f', 'f']]) assert.ok(validateUniversityEnrollment(ids, ['f'], 'student@test.org', ''));
+assert.ok(validateUniversityEnrollment(['f'], ['f'], 'invalid', ''));
+assert.ok(validateUniversityEnrollment(['f'], ['f'], 'student@test.org', 'invalid'));
+assert.equal(allUniversityChaptersPassed(['a', 'b'], { 0: 75, 1: 100 }), true);
+assert.equal(allUniversityChaptersPassed(['a', 'b'], { 0: 75, 9: 100 }), false);
+assert.equal(allUniversityChaptersPassed(['a'], { 0: 101 }), false);
+assert.equal(allUniversityChaptersPassed([], {}), false);
+const questions = [{ id: 'q', options: ['A', 'B'] }];
+assert.equal(universityAnswersComplete(questions, { q: 1 }), true);
+assert.equal(universityAnswersComplete(questions, {}), false);
+assert.equal(universityAnswersComplete(questions, { q: 2 }), false);
+assert.equal(universityAnswersComplete([], {}), false);
+console.log('University : 14 assertions inscription, chapitres et reponses reussies.');

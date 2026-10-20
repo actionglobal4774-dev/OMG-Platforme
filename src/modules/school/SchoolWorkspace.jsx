@@ -1,8 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
+import { isDemoMode } from "../../services/runtimePolicy";
+import { canReadSchoolReport, ownsSchool, validateSchoolBooks } from "./schoolJourney";
+import { duplicateSchoolClass, validateSchoolFeePeriod, validateSchoolReportContext } from "./schoolFormValidation";
 import {
   generateReceipt,
   getCollection,
-  simulatePayment,
+  prepareModulePayment,
   upsertItem
 } from "../../services/localActionService";
 import { saveModuleActivity } from "../../services/activityService";
@@ -36,9 +39,9 @@ function getMode(action) {
   return "fees";
 }
 
-function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
+function SchoolWorkspace({ selectedAction, profile, closeModuleAction, initialReference = "" }) {
   const mode = getMode(selectedAction);
-  const [beneficiary, setBeneficiary] = useState({ name: "", studentId: "", relationship: "Parent" });
+  const [beneficiary, setBeneficiary] = useState({ name: "", studentId: initialReference, relationship: "Parent" });
   const [feePayment, setFeePayment] = useState({ feeId: "", method: "Payflow", pin: "", confirmed: false });
   const [bookCart, setBookCart] = useState([]);
   const [school, setSchool] = useState({ name: "", country: "", city: "", address: "", payout: "Payflow" });
@@ -50,12 +53,16 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
   const [notice, setNotice] = useState("");
   const [reference, setReference] = useState("");
   const [isPaying, setIsPaying] = useState(false);
+  const pending = useRef(false);
+  const [review, setReview] = useState(null);
+  const [reportCodes, setReportCodes] = useState({});
 
   const schools = getCollection("school_establishments");
+  const classes = getCollection("school_classes");
   const configuredFees = getCollection("school_fees");
-  const fees = configuredFees.length ? configuredFees : starterFees;
+  const fees = configuredFees.length ? configuredFees : isDemoMode ? starterFees : [];
   const configuredBooks = getCollection("school_books");
-  const books = configuredBooks.length ? configuredBooks : starterBooks;
+  const books = configuredBooks.length ? configuredBooks : isDemoMode ? starterBooks : [];
   const reports = getCollection("school_reports");
   const messages = getCollection("school_messages");
   const payments = getCollection("payments").filter((item) => normalize(item.label).includes("school"));
@@ -65,21 +72,17 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
     saveModuleActivity("school", {
       action,
       reference: nextReference,
-      status: "confirmed",
+      status: "prepared",
       profile: { email: profile?.email, userType: profile?.userType, country: profile?.country }
     });
     setReference(nextReference);
-    setNotice(text);
+    setNotice(`${text} Enregistrement local : validation serveur non garantie.`);
   };
 
-  const payFee = async () => {
+  const executeFeePayment = async () => {
     const selected = fees.find((item) => item.id === feePayment.feeId);
     if (!selected || !beneficiary.name.trim() || !beneficiary.studentId.trim()) {
       setNotice("Beneficiaire, identifiant eleve et frais sont obligatoires.");
-      return;
-    }
-    if (feePayment.method === "Payflow" && !/^\d{4}$/.test(feePayment.pin)) {
-      setNotice("Entrez un PIN Payflow a 4 chiffres.");
       return;
     }
     if (!feePayment.confirmed) {
@@ -100,6 +103,7 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
           cancelUrl: `${baseUrl}#/stripe-cancel`
         });
         if (!session.redirectUrl) throw new Error("Stripe n'a pas fourni de page de paiement securisee.");
+        sessionStorage.setItem("omgStripePending", JSON.stringify({ sessionId: session.sessionId, moduleId: "school", feeId: selected.id }));
         window.location.assign(session.redirectUrl);
         return;
       } catch (error) {
@@ -139,20 +143,38 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
       setNotice("NatCash sera active apres reception des identifiants API marchands officiels de Natcom. Aucun paiement n'a ete lance.");
       return;
     }
-    const paid = simulatePayment({ amount: selected.amount, currency: selected.currency, label: "School Fee", method: feePayment.method });
+    const paid = await prepareModulePayment({ moduleId: "school", action: "Payer frais", amount: selected.amount, currency: selected.currency, label: "School Fee", method: feePayment.method, feeId: selected.id });
+    if (!paid.ok) throw new Error(paid.error || "Preparation impossible.");
     const enrollmentPayment = upsertItem("school_payments", {
       paymentId: paid.data.id,
       feeId: selected.id,
       beneficiary,
       school: selected.school,
       guardian: profile?.email,
-      status: "paid"
+      status: paid.live ? "prepared" : "simulated"
     });
-    generateReceipt(paid.data);
-    complete("Paiement frais scolaires", enrollmentPayment.data.id, "Frais payes et recu genere.");
+    if (!paid.live) generateReceipt(paid.data);
+    setReview(null);
+    setFeePayment((current) => ({ ...current, pin: "", confirmed: false }));
+    complete("Paiement frais scolaires", enrollmentPayment.data.id, paid.live ? "Paiement prepare, aucun reglement scolaire confirme." : "Demonstration uniquement : aucun paiement reel.");
+  };
+
+  const payFee = async (confirmed = false) => {
+    if (pending.current) return;
+    const selected = fees.find((item) => item.id === feePayment.feeId);
+    if (!selected || !Number.isFinite(Number(selected.amount)) || Number(selected.amount) <= 0 || !beneficiary.name.trim() || !beneficiary.studentId.trim() || !feePayment.confirmed) { setNotice("Beneficiaire, frais valides et confirmation obligatoires."); return; }
+    if (["NatCash", "Banque"].includes(feePayment.method)) { setNotice("Ce moyen n'est pas encore connecte pour School. Aucun paiement lance."); return; }
+    if (!configuredFees.length && feePayment.method !== "Payflow") { setNotice("Les frais exemples ne peuvent pas etre payes chez un prestataire reel."); return; }
+    if (getCollection("school_payments").some((item) => item.feeId === selected.id && item.beneficiary?.studentId === beneficiary.studentId && item.guardian === profile?.email && ["prepared", "simulated", "paid"].includes(item.status))) { setNotice("Une operation existe deja pour cet eleve et ces frais. Verifiez son statut."); return; }
+    if (!confirmed) { setNotice(""); setReview({ kind: "fees", amount: selected.amount, currency: selected.currency, label: selected.label }); return; }
+    pending.current = true;
+    setIsPaying(true);
+    try { await executeFeePayment(); } catch (error) { setNotice(error?.message || "Preparation impossible."); }
+    finally { pending.current = false; setIsPaying(false); }
   };
 
   const addBook = (item) => {
+    if ((bookCart.find((entry) => entry.id === item.id)?.quantity || 0) >= item.stock) { setNotice("Stock maximum atteint."); return; }
     setBookCart((current) => {
       const found = current.find((entry) => entry.id === item.id);
       return found ? current.map((entry) => entry.id === item.id ? { ...entry, quantity: entry.quantity + 1 } : entry) : [...current, { ...item, quantity: 1 }];
@@ -160,20 +182,32 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
     setNotice(`${item.title} ajoute.`);
   };
 
-  const buyBooks = () => {
+  const buyBooks = async (confirmed = false) => {
+    if (pending.current) return;
+    const validation = validateSchoolBooks(bookCart, books);
+    if (validation) { setNotice(validation); return; }
     if (!bookCart.length || !beneficiary.name.trim() || !beneficiary.studentId.trim()) {
       setNotice("Ajoutez un livre et renseignez le beneficiaire.");
       return;
     }
-    if (!/^\d{4}$/.test(feePayment.pin) || !feePayment.confirmed) {
-      setNotice("PIN Payflow a 4 chiffres et confirmation obligatoires.");
+    if (!feePayment.confirmed) {
+      setNotice("Confirmez le beneficiaire et le panier.");
       return;
     }
-    const paid = simulatePayment({ amount: cartTotal, currency: "USD", label: "School Books", method: "Payflow" });
-    const order = upsertItem("school_book_orders", { items: bookCart, total: cartTotal, beneficiary, guardian: profile?.email, paymentId: paid.data.id, status: "paid" });
-    generateReceipt(paid.data);
+    if (!confirmed) { setNotice(""); setReview({ kind: "books", amount: cartTotal, currency: "USD", label: "Livres scolaires" }); return; }
+    pending.current = true;
+    setIsPaying(true);
+    try {
+    const paid = await prepareModulePayment({ moduleId: "school", action: "Acheter livres", amount: cartTotal, currency: "USD", label: "School Books", method: "Payflow" });
+    if (!paid.ok) throw new Error(paid.error || "Preparation impossible.");
+    const order = upsertItem("school_book_orders", { items: bookCart, total: cartTotal, beneficiary, guardian: profile?.email, paymentId: paid.data.id, status: paid.live ? "prepared" : "simulated" });
+    if (!paid.live) generateReceipt(paid.data);
     setBookCart([]);
-    complete("Achat livres scolaires", order.data.id, "Livres payes. Commande en preparation.");
+    setReview(null);
+    setFeePayment((current) => ({ ...current, pin: "", confirmed: false }));
+    complete("Achat livres scolaires", order.data.id, paid.live ? "Demande de paiement preparee. Commande et livraison non confirmees." : "Achat de demonstration uniquement.");
+    } catch (error) { setNotice(error?.message || "Preparation impossible."); }
+    finally { pending.current = false; setIsPaying(false); }
   };
 
   const createSchool = () => {
@@ -186,6 +220,8 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const createClass = () => {
+    if (duplicateSchoolClass(classes, schoolClass)) { setNotice("Cette classe et ce niveau existent deja dans cette ecole."); return; }
+    if (!ownsSchool(schools, schoolClass.schoolId, profile?.email)) { setNotice("Choisissez votre propre ecole."); return; }
     const capacity = Number(schoolClass.capacity);
     if (!schoolClass.schoolId || !schoolClass.name.trim() || !schoolClass.level.trim() || !Number.isInteger(capacity) || capacity < 1) {
       setNotice("Ecole, classe, niveau et capacite valide sont obligatoires.");
@@ -196,6 +232,9 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const publishFee = () => {
+    const periodError = validateSchoolFeePeriod(fee);
+    if (periodError) { setNotice(periodError); return; }
+    if (!ownsSchool(schools, fee.schoolId, profile?.email)) { setNotice("Choisissez votre propre ecole."); return; }
     const amount = Number(fee.amount);
     if (!fee.schoolId || !fee.label.trim() || !fee.level.trim() || !Number.isFinite(amount) || amount <= 0) {
       setNotice("Ecole, libelle, niveau et montant valide sont obligatoires.");
@@ -207,6 +246,7 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const sellBook = () => {
+    if (!ownsSchool(schools, book.schoolId, profile?.email)) { setNotice("Choisissez votre propre ecole."); return; }
     const price = Number(book.price);
     const stock = Number(book.stock);
     if (!book.schoolId || !book.title.trim() || !book.level.trim() || !Number.isFinite(price) || price <= 0 || !Number.isInteger(stock) || stock < 0) {
@@ -218,12 +258,15 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const publishReport = () => {
+    const contextError = validateSchoolReportContext(report, schools, classes, profile?.email);
+    if (contextError) { setNotice(contextError); return; }
+    if (reports.some((item) => item.schoolId === report.schoolId && item.classId === report.classId && item.studentId === report.studentId && item.schoolYear === report.schoolYear && item.period === report.period)) { setNotice("Un brouillon existe deja pour cet eleve et cette periode."); return; }
     if (!report.studentId.trim() || !report.studentName.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(report.guardianEmail) || !report.period.trim() || !report.summary.trim() || !/^\d{6}$/.test(report.accessCode)) {
       setNotice("Eleve, email responsable, periode, resume et code a 6 chiffres sont obligatoires.");
       return;
     }
-    const result = upsertItem("school_reports", { ...report, schoolOwner: profile?.email, protected: true, status: "published" });
-    complete("Publier rapport protege", result.data.id, "Rapport publie pour le responsable autorise.");
+    const result = upsertItem("school_reports", { ...report, schoolOwner: profile?.email, status: "draft" });
+    complete("Publier rapport protege", result.data.id, "Brouillon local uniquement ; protection et diffusion serveur non certifiees.");
   };
 
   const sendMessage = () => {
@@ -231,8 +274,8 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
       setNotice("Destinataire, sujet et message sont obligatoires.");
       return;
     }
-    const result = upsertItem("school_messages", { ...message, sender: profile?.email, status: "sent" });
-    complete("Message ecole", result.data.id, "Message envoye.");
+    const result = upsertItem("school_messages", { ...message, sender: profile?.email, status: "draft" });
+    complete("Message ecole", result.data.id, "Brouillon enregistre. Aucun message transmis au destinataire.");
   };
 
   const visibleReports = reports.filter((item) => normalize(item.guardianEmail) === normalize(profile?.email));
@@ -245,16 +288,19 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
     </div>
   );
 
+  if (review) return <section className="mt-5 space-y-4 rounded-2xl border bg-white p-5"><h3 className="text-xl font-bold">Verifier la demande</h3><p>{beneficiary.name} · Eleve {beneficiary.studentId}</p><p>{review.label} · {Number(review.amount).toFixed(2)} {review.currency}</p><p>{review.kind === "books" ? "Payflow" : feePayment.method} — preparation ou ouverture du prestataire, pas confirmation du reglement scolaire.</p><button disabled={isPaying} onClick={() => review.kind === "books" ? buyBooks(true) : payFee(true)} className="rounded bg-omgGreen p-3 text-white">{isPaying ? "Traitement…" : "Confirmer"}</button><button disabled={isPaying} onClick={() => setReview(null)} className="ml-3 rounded border p-3">Modifier / annuler</button>{notice && <p role="alert">{notice}</p>}</section>;
+
   return (
     <div className="mt-5 space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 text-amber-900">Donnees locales ou exemples. N'entrez pas de dossiers reels d'eleves : confidentialite et autorisations serveur restent a certifier.</p>
       {mode === "fees" && (
         <Section title="Paiement des frais">
           <BeneficiaryFields />
           <select className="mt-3 w-full rounded border p-3" value={feePayment.feeId} onChange={(e) => setFeePayment({ ...feePayment, feeId: e.target.value })}><option value="">Choisir les frais</option>{fees.map((item) => <option key={item.id} value={item.id}>{item.school} · {item.label} · {item.amount} {item.currency}</option>)}</select>
           <select className="mt-3 w-full rounded border p-3" value={feePayment.method} onChange={(e) => setFeePayment({ ...feePayment, method: e.target.value })}><option>Payflow</option><option>Carte bancaire</option><option>MonCash</option><option>NatCash</option><option>Banque</option></select>
-          {feePayment.method === "Payflow" && <input placeholder="PIN Payflow" maxLength="4" className="mt-3 w-full rounded border p-3" value={feePayment.pin} onChange={(e) => setFeePayment({ ...feePayment, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />}
+          <p className="mt-3 text-sm">Aucun PIN requis pour preparer une demande.</p>
           <label className="mt-3 flex gap-2"><input type="checkbox" checked={feePayment.confirmed} onChange={(e) => setFeePayment({ ...feePayment, confirmed: e.target.checked })} /> Je confirme l'eleve, les frais et le montant.</label>
-          <button type="button" onClick={payFee} disabled={isPaying} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:cursor-wait disabled:opacity-60">{isPaying ? "Ouverture de Stripe..." : "Payer les frais"}</button>
+          <button type="button" onClick={() => payFee()} disabled={isPaying} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white disabled:cursor-wait disabled:opacity-60">{isPaying ? "Traitement..." : "Verifier le paiement des frais"}</button>
         </Section>
       )}
 
@@ -264,16 +310,16 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
             <BeneficiaryFields />
             <div className="mt-4 grid gap-3 md:grid-cols-3">{books.map((item) => <article key={item.id} className="rounded-xl bg-slate-50 p-4"><strong>{item.title}</strong><p>{item.level} · Stock {item.stock}</p><p className="mt-2 text-xl font-black text-omgGreen">{item.price} USD</p><button type="button" disabled={item.stock <= 0} onClick={() => addBook(item)} className="mt-2 rounded bg-omgGreen px-3 py-2 font-bold text-white disabled:opacity-50">Ajouter</button></article>)}</div>
             <p className="mt-4 font-bold">Panier : {bookCart.length} livre(s) · {cartTotal.toFixed(2)} USD</p>
-            <input placeholder="PIN Payflow" maxLength="4" className="mt-3 w-full rounded border p-3" value={feePayment.pin} onChange={(e) => setFeePayment({ ...feePayment, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />
+            {bookCart.map((item) => <div key={item.id} className="mt-2 flex gap-3"><span>{item.title} × {item.quantity}</span><button onClick={() => setBookCart((current) => current.filter((entry) => entry.id !== item.id))} className="underline">Retirer</button></div>)}
             <label className="mt-3 flex gap-2"><input type="checkbox" checked={feePayment.confirmed} onChange={(e) => setFeePayment({ ...feePayment, confirmed: e.target.checked })} /> Je confirme le panier et le beneficiaire.</label>
-            <button type="button" onClick={buyBooks} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Payer les livres</button>
+            <button type="button" onClick={() => buyBooks()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Verifier le panier</button>
           </Section>
         </>
       )}
 
       {mode === "reports" && (
         <Section title="Rapports proteges">
-          <div className="mt-4 space-y-3">{!visibleReports.length && <p className="text-slate-600">Aucun rapport autorise pour ce compte.</p>}{visibleReports.map((item) => <article key={item.id} className="rounded-xl bg-slate-50 p-4"><strong>{item.studentName} · {item.period}</strong><p>{item.summary}</p></article>)}</div>
+          <p className="mt-3 text-sm">Verrou local de demonstration uniquement, pas une protection serveur.</p><div className="mt-4 space-y-3">{!visibleReports.length && <p className="text-slate-600">Aucun rapport autorise pour ce compte.</p>}{visibleReports.map((item) => <article key={item.id} className="rounded-xl bg-slate-50 p-4"><strong>{item.period}</strong><input aria-label="Code du rapport" type="password" inputMode="numeric" maxLength={6} className="mt-3 block rounded border p-3" value={reportCodes[item.id] || ""} onChange={(event) => setReportCodes((current) => ({ ...current, [item.id]: event.target.value.replace(/\D/g, "") }))} />{canReadSchoolReport(item, profile?.email, reportCodes[item.id]) ? <p>{item.studentName} · {item.summary}</p> : <p>Saisissez le code a 6 chiffres pour afficher le brouillon local.</p>}</article>)}</div>
         </Section>
       )}
 
@@ -303,6 +349,7 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
 
       {mode === "set-fees" && (
         <Section title="Fixer les frais">
+          <div className="mt-3 grid gap-3 md:grid-cols-3"><input aria-label="Annee scolaire facturee" placeholder="Annee scolaire, ex. 2026-2027" className="rounded border p-3" value={fee.schoolYear || ""} onChange={(event) => setFee({ ...fee, schoolYear: event.target.value })} /><input aria-label="Periode facturee" placeholder="Periode, ex. trimestre 1" className="rounded border p-3" value={fee.period || ""} onChange={(event) => setFee({ ...fee, period: event.target.value })} /><select aria-label="Devise des frais" className="rounded border p-3" value={fee.currency} onChange={(event) => setFee({ ...fee, currency: event.target.value })}><option>USD</option><option>HTG</option><option>EUR</option></select></div>
           <div className="mt-4 grid gap-3 md:grid-cols-2"><select className="rounded border p-3" value={fee.schoolId} onChange={(e) => setFee({ ...fee, schoolId: e.target.value })}><option value="">Choisir une ecole</option>{schools.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input placeholder="Libelle" className="rounded border p-3" value={fee.label} onChange={(e) => setFee({ ...fee, label: e.target.value })} /><input placeholder="Niveau" className="rounded border p-3" value={fee.level} onChange={(e) => setFee({ ...fee, level: e.target.value })} /><input aria-label="Montant" type="number" min="0" className="rounded border p-3" value={fee.amount} onChange={(e) => setFee({ ...fee, amount: e.target.value })} /></div>
           <button type="button" onClick={publishFee} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Publier les frais</button>
         </Section>
@@ -317,13 +364,14 @@ function SchoolWorkspace({ selectedAction, profile, closeModuleAction }) {
 
       {mode === "publish-report" && (
         <Section title="Publier un rapport protege">
+          <div className="mt-3 grid gap-3 md:grid-cols-3"><select aria-label="Ecole du rapport" className="rounded border p-3" value={report.schoolId || ""} onChange={(event) => setReport({ ...report, schoolId: event.target.value, classId: "" })}><option value="">Choisir mon ecole</option>{schools.filter((item) => ownsSchool(schools, item.id, profile?.email)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><select aria-label="Classe du rapport" className="rounded border p-3" value={report.classId || ""} onChange={(event) => setReport({ ...report, classId: event.target.value })}><option value="">Choisir la classe</option>{classes.filter((item) => item.schoolId === report.schoolId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input aria-label="Annee scolaire du rapport" placeholder="Annee scolaire" className="rounded border p-3" value={report.schoolYear || ""} onChange={(event) => setReport({ ...report, schoolYear: event.target.value })} /></div>
           <div className="mt-4 grid gap-3 md:grid-cols-2"><input placeholder="Identifiant eleve" className="rounded border p-3" value={report.studentId} onChange={(e) => setReport({ ...report, studentId: e.target.value })} /><input placeholder="Nom de l'eleve" className="rounded border p-3" value={report.studentName} onChange={(e) => setReport({ ...report, studentName: e.target.value })} /><input placeholder="Email du responsable autorise" className="rounded border p-3" value={report.guardianEmail} onChange={(e) => setReport({ ...report, guardianEmail: e.target.value })} /><input placeholder="Periode" className="rounded border p-3" value={report.period} onChange={(e) => setReport({ ...report, period: e.target.value })} /><textarea placeholder="Resume du rapport" className="rounded border p-3 md:col-span-2" value={report.summary} onChange={(e) => setReport({ ...report, summary: e.target.value })} /><input placeholder="Code d'acces a 6 chiffres" maxLength="6" className="rounded border p-3" value={report.accessCode} onChange={(e) => setReport({ ...report, accessCode: e.target.value.replace(/\D/g, "").slice(0, 6) })} /></div>
           <button type="button" onClick={publishReport} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Publier le rapport</button>
         </Section>
       )}
 
       {(notice || reference) && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 font-bold text-emerald-900">{notice}{reference && <div className="mt-1 text-sm">Reference : {reference}</div>}</div>}
-      {!!payments.length && <p className="text-sm font-bold text-slate-600">{payments.length} paiement(s) School confirme(s).</p>}
+      {!!payments.length && <p className="text-sm font-bold text-slate-600">{payments.length} operation(s) locales School, non preuves de paiement reel.</p>}
       <button type="button" onClick={closeModuleAction} className="rounded border border-slate-300 px-4 py-2 font-bold text-slate-700">Retour au menu</button>
     </div>
   );

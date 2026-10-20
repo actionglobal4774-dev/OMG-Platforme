@@ -1,11 +1,8 @@
 import { callFirebaseFunction, isFirebaseConfigured } from "./firebaseClient.js";
 import { requireDemoMode } from "./runtimePolicy.js";
+import { readPayflowEvents, recordPayflowEvent } from "./payflowJourney.js";
 
 const demoWallet = { balance: 1250, currency: "USD", status: "demo" };
-const demoTransactions = [
-  { id: "PF-1001", type: "received", amount: 50, currency: "USD" },
-  { id: "PF-1002", type: "sent", amount: 25, currency: "USD" }
-];
 
 function mockResponse(data) {
   return Promise.resolve({ data: { ...data, mock: true } });
@@ -17,6 +14,7 @@ function withoutPin(data = {}) {
 }
 
 export function getWallet() {
+  requireDemoMode("La lecture du solde réel Payflow");
   return mockResponse(demoWallet);
 }
 
@@ -31,10 +29,13 @@ export async function sendMoney(data) {
       userCountry: userCountry || "HT",
       destinationCountry: bankCountry || userCountry || "HT"
     });
+    recordPayflowEvent({ reference: draft.draftId, type: "sent", amount: data.amount, currency: data.currency, status: "awaiting_verification", live: true });
     return { data: { ...draft, reference: draft.draftId, request: safeData, live: true } };
   }
   requireDemoMode("Le transfert Payflow");
-  return mockResponse({ ok: true, reference: "PF-DEMO-SEND", request: withoutPin(data) });
+  const reference = `PF-DEMO-SEND-${Date.now()}`;
+  recordPayflowEvent({ reference, type: "sent", amount: data.amount, currency: data.currency, status: "demo" });
+  return mockResponse({ ok: true, reference, request: withoutPin(data) });
 }
 
 export async function requestMoney(data) {
@@ -47,10 +48,13 @@ export async function requestMoney(data) {
       note: data.note,
       humanConfirmed: data.confirmed === true
     });
+    recordPayflowEvent({ reference: request.requestId, type: "request", amount: data.amount, currency: data.currency, status: "awaiting_payment", live: true });
     return { data: { ...request, reference: request.requestId, live: true } };
   }
   requireDemoMode("La demande Payflow");
-  return mockResponse({ ok: true, reference: "PF-DEMO-REQUEST", request: withoutPin(data) });
+  const reference = `PF-DEMO-REQUEST-${Date.now()}`;
+  recordPayflowEvent({ reference, type: "request", amount: data.amount, currency: data.currency, status: "demo" });
+  return mockResponse({ ok: true, reference, request: withoutPin(data) });
 }
 
 export async function receiveMoney(data) {
@@ -59,18 +63,24 @@ export async function receiveMoney(data) {
       mode: data.mode,
       humanConfirmed: data.confirmed === true
     });
+    recordPayflowEvent({ reference: receipt.receiptId, type: "receive", status: "awaiting_payment", live: true });
     return { data: { ...receipt, reference: receipt.receiptId, live: true } };
   }
   requireDemoMode("La reception Payflow");
-  return mockResponse({ ok: true, reference: "PF-DEMO-RECEIVE", request: withoutPin(data) });
+  const reference = `PF-DEMO-RECEIVE-${Date.now()}`;
+  recordPayflowEvent({ reference, type: "receive", status: "demo" });
+  return mockResponse({ ok: true, reference, request: withoutPin(data) });
 }
 
 export function getTransactions() {
-  return Promise.resolve({ data: demoTransactions });
+  return Promise.resolve({ data: readPayflowEvents(), source: "local_journey" });
 }
 
 export function payService(data) {
-  return mockResponse({ ok: true, reference: "PF-DEMO-CHECKOUT", request: withoutPin(data) });
+  requireDemoMode("Le paiement Payflow");
+  const reference = `PF-DEMO-CHECKOUT-${Date.now()}`;
+  recordPayflowEvent({ reference, type: data.operation || "payment", amount: data.amount, currency: data.currency, status: "demo" });
+  return mockResponse({ ok: true, reference, request: withoutPin(data) });
 }
 
 export function createQrSession(data) {

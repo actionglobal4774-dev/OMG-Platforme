@@ -11,7 +11,8 @@ const checks = [
   ["payflow payment available", "<option value=\"Payflow\">Payflow</option>"],
   ["backend payment action", "Paiement session University Integration"],
   ["local activity saved", "saveModuleActivity(\"university\""],
-  ["courses unlocked after payment", "setPaid(true)"]
+  ["demo access is separate from payment", "setPaid(isDemoMode)"]
+  ,["enrollment validation", "validateUniversityEnrollment"]
   ,["Firestore enrollment saved", 'upsertCloudItem("university", "enrollments"']
   ,["Firestore payment saved", 'upsertCloudItem("university", "payments"']
   ,["Firestore progress synchronized", 'upsertCloudItem("university", "learning_progress"']
@@ -27,4 +28,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log("OK: University Integration payment is dynamic and connected.");
+console.log("OK statique: tarif dynamique et demande University presentes ; paiement reel et droits serveur non certifies.");

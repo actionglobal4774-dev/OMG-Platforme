@@ -1,7 +1,7 @@
 import React from "react";
 import ModuleDashboardTemplate from "../../components/modules/ModuleDashboardTemplate";
 import { getModuleById } from "../../data/modules";
-import AdminWorkspace from "./AdminWorkspace";
+import ModuleActionDestination from "../../components/modules/ModuleActionDestination";
 
 function AdminDashboard() {
   const module = getModuleById("administration");
@@ -11,8 +11,8 @@ function AdminDashboard() {
       compactMenu
       menuActions={module.actions}
       suppressCompactActionFooter
-      renderCompactAction={({ selectedAction, profile, closeModuleAction }) => (
-        <AdminWorkspace selectedAction={selectedAction} profile={profile} closeModuleAction={closeModuleAction} />
+      renderCompactAction={({ selectedAction }) => (
+        <ModuleActionDestination moduleId="administration" action={selectedAction} />
       )}
     />
   );

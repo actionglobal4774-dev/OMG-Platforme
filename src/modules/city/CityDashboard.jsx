@@ -1,7 +1,7 @@
 import React from "react";
 import ModuleDashboardTemplate from "../../components/modules/ModuleDashboardTemplate";
 import { getModuleById } from "../../data/modules";
-import CityWorkspace from "./CityWorkspace";
+import ModuleActionDestination from "../../components/modules/ModuleActionDestination";
 
 function CityDashboard() {
   const module = getModuleById("city");
@@ -12,8 +12,8 @@ function CityDashboard() {
       compactMenu
       menuActions={module.actions}
       suppressCompactActionFooter
-      renderCompactAction={({ selectedAction, profile, closeModuleAction }) => (
-        <CityWorkspace selectedAction={selectedAction} profile={profile} closeModuleAction={closeModuleAction} />
+      renderCompactAction={({ selectedAction }) => (
+        <ModuleActionDestination moduleId="city" action={selectedAction} />
       )}
     />
   );

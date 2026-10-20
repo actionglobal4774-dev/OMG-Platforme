@@ -54,4 +54,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log("Audit Health Care: REUSSI — routes protegees, 9 profils, parcours cliniques, flux securises et filtrage patient verifies.");
+console.log("Audit statique Health Care: REUSSI — presence des routes, 9 profils, parcours et filtres. Ne certifie ni securite serveur ni recette navigateur.");

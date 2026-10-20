@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { quoteTravel, validateTravelTrip } from '../src/modules/travel/travelJourney.js';
+const trip = { origin: 'Boston', destination: 'Paris', departure: '2027-01-01', days: '3', travelers: '2', rooms: '2', consent: true };
+const flight = { supplierPrice: 100, taxes: 20 };
+const hotel = { nightly: 100, taxes: 10 };
+const quote = quoteTravel(trip, flight, hotel, { price: 5 });
+assert.deepEqual(quote, { flightAmount: 240, hotelAmount: 620, insuranceAmount: 10, ticketServiceFee: 9.98, roomServiceFee: 9.98, serviceFee: 19.96, total: 889.96 });
+assert.equal(quoteTravel({ ...trip, days: '10' }, null, hotel, null).roomServiceFee, 9.98);
+assert.equal(quoteTravel(trip, flight, null, null).roomServiceFee, 0);
+assert.equal(quoteTravel(trip, null, hotel, null).ticketServiceFee, 0);
+assert.equal(validateTravelTrip(trip, '2026-10-19'), '');
+for (const changes of [{ days: '-1' }, { travelers: '1.5' }, { rooms: '0' }, { departure: '2026-02-30' }, { departure: '2026-01-01' }, { consent: false }, { origin: '' }, { budget: 'NaN' }]) assert.ok(validateTravelTrip({ ...trip, ...changes }, '2026-10-19'));
+assert.equal(quoteTravel({ ...trip, travelers: '-1' }, flight, hotel, null), null);
+assert.equal(quoteTravel(trip, { supplierPrice: NaN, taxes: 20 }, null, null), null);
+console.log('Travel : 15 assertions tarifs, frais et voyage reussies.');

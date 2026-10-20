@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { validPropertyDate, validatePropertyDraft, validatePropertyMedia } from '../src/modules/property/propertyFormValidation.js';
+const draft = { title: 'Maison', country: 'Haiti', city: 'Cap-Haitien', street: 'Rue exemple', type: 'House', currency: 'USD', price: '100', bedrooms: '2', bathrooms: '1', authorized: true };
+assert.equal(validatePropertyDraft(draft), '');
+for (const change of [{ bedrooms: '-1' }, { bathrooms: '1.5' }, { price: 'NaN' }, { authorized: false }, { type: 'Land' }, { currency: 'BAD' }]) assert.ok(validatePropertyDraft({ ...draft, ...change }));
+assert.equal(validPropertyDate('2026-02-30'), false);
+assert.equal(validPropertyDate('2028-02-29'), true);
+assert.equal(validatePropertyMedia({ type: 'image/jpeg', size: 100 }, 'photo'), '');
+assert.ok(validatePropertyMedia({ type: 'video/mp4', size: 100 }, 'photo'));
+assert.ok(validatePropertyMedia({ type: 'image/jpeg', size: 6 * 1024 * 1024 }, 'photo'));
+console.log('Property : 12 assertions formulaires, dates et medias reussies.');

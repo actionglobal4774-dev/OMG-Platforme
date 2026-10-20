@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { supervisedModules, adminActivityCount, validateAdminModuleRequest } from '../src/modules/administration/adminModules.js';
+assert.equal(supervisedModules.length, 11);
+assert.equal(new Set(supervisedModules.map((item) => item.id)).size, 11);
+const source = fs.readFileSync(new URL('../src/data/modules.js', import.meta.url), 'utf8');
+for (const item of supervisedModules) assert.ok(source.includes(`route: "${item.path}"`), item.id);
+assert.equal(adminActivityCount({ city: [1, 2] }, 'city'), 2);
+assert.equal(adminActivityCount({ taxpro: [1] }, 'tax'), 1);
+assert.equal(adminActivityCount({}, 'health'), 0);
+assert.equal(validateAdminModuleRequest('travel', 'Revue du module', 'Verification des fournisseurs', 'admin@test'), '');
+assert.ok(validateAdminModuleRequest('unknown', 'Revue du module', 'Justification longue', 'admin@test'));
+assert.ok(validateAdminModuleRequest('travel', 'Suspendre immediatement', 'Justification longue', 'admin@test'));
+assert.ok(validateAdminModuleRequest('travel', 'Revue du module', '', 'admin@test'));
+console.log('Administration : 11 modules et routes, compteurs et demandes controles.');

@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { quoteTravel, travelHotelNights, validateTravelDates } from '../src/modules/travel/travelJourney.js';
+const trip = { departure: '2027-01-01', returnDate: '2027-01-10', checkIn: '2027-01-02', checkOut: '2027-01-05', days: 10, travelers: 1, rooms: 2 };
+assert.equal(travelHotelNights(trip), 3);
+assert.equal(validateTravelDates(trip, true), '');
+assert.ok(validateTravelDates({ ...trip, returnDate: '2026-12-31' }, true));
+assert.ok(validateTravelDates({ ...trip, checkIn: '2026-12-31' }, true));
+assert.ok(validateTravelDates({ ...trip, checkOut: '2027-01-11' }, true));
+assert.equal(travelHotelNights({ checkIn: '2027-02-30', checkOut: '2027-03-04' }), null);
+const quote = quoteTravel(trip, null, { nightly: 100, taxes: 10 }, null);
+assert.equal(quote.hotelAmount, 620);
+assert.equal(quote.roomServiceFee, 9.98);
+assert.equal(quote.total, 629.98);
+console.log('Travel : 9 assertions dates sejour et frais reussies.');

@@ -1,9 +1,11 @@
 import React, { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { supervisedModules, adminActivityCount, validateAdminModuleRequest } from "./adminModules";
 import { getCollection, upsertItem } from "../../services/localActionService";
 import { saveModuleActivity } from "../../services/activityService";
 import AdminFinancialGovernance from "./AdminFinancialGovernance";
 
-const businessModules = ["Payflow", "Mailport", "Property", "Restaurant", "Store", "Health", "School", "City", "USA Tax Pro", "University"];
+const businessModules = ["Payflow", "Mailport", "Property", "Restaurant", "Store", "Health", "School", "City", "USA Tax Pro", "University", "Travel"];
 const platformModules = [...businessModules, "Administration"];
 
 function normalize(value) {
@@ -55,6 +57,7 @@ function AdminWorkspace({ selectedAction, profile, closeModuleAction }) {
   const [moduleFilter, setModuleFilter] = useState("Tous");
   const [notice, setNotice] = useState("");
   const [reference, setReference] = useState("");
+  const [moduleRequest, setModuleRequest] = useState({ moduleId: "payflow", action: "Revue du module", reason: "", confirmed: false });
 
   const payments = getCollection("payments");
   const activitiesByModule = (() => {
@@ -81,11 +84,11 @@ function AdminWorkspace({ selectedAction, profile, closeModuleAction }) {
     saveModuleActivity("administration", {
       action,
       reference: nextReference,
-      status: "confirmed",
+      status: "prepared",
       profile: { email: profile?.email, userType: profile?.userType, country: profile?.country }
     });
     setReference(nextReference);
-    setNotice(message);
+    setNotice(`${message} Preparation locale uniquement : aucune permission ni execution serveur confirmee.`);
   };
 
   const prepareWithAssistant = () => {
@@ -148,9 +151,7 @@ function AdminWorkspace({ selectedAction, profile, closeModuleAction }) {
       setNotice("Code a 6 chiffres et confirmation du second approbateur obligatoires.");
       return;
     }
-    upsertItem("admin_approvals", { ...request, status: "approved", secondApprover: critical.approverEmail, secondApprovalAt: new Date().toISOString() });
-    addAdminAudit("CRITICAL_ACTION_APPROVED", critical.approverEmail, request.targetId, request.action, request.id);
-    complete("Double validation", request.id, "Double validation enregistree. L'execution backend restera controlee par l'API securisee.");
+    setNotice("Seconde validation non connectee : une autre personne doit etre authentifiee et autorisee par le serveur. Aucun code saisi ici ne peut approuver la demande.");
   };
 
   const requestRoleChange = () => {
@@ -224,6 +225,16 @@ function AdminWorkspace({ selectedAction, profile, closeModuleAction }) {
 
   return (
     <div className="mt-5 space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 text-amber-900">Console frontend : donnees et demandes locales uniquement. Aucun acces clinique, scolaire ou fiscal implicite ; aucune activation, suspension ou permission serveur accordee ici.</p>
+      {["dashboard", "module-reports"].includes(mode) && <Section title="Supervision des 11 modules metier">
+        <div className="mt-4 grid gap-3 md:grid-cols-3">{supervisedModules.map((item) => <article key={item.id} className="rounded-xl border bg-slate-50 p-4"><h3 className="font-black">{item.name}</h3><p className="mt-2 text-sm">{item.scope}</p><p className="mt-2 text-sm">{adminActivityCount(activitiesByModule, item.id)} activite(s) locales — pas un etat serveur</p><Link to={item.path} className="mt-3 block font-bold text-omgGreen">Ouvrir le module avec ses permissions</Link><button onClick={() => setModuleRequest((current) => ({ ...current, moduleId: item.id, confirmed: false }))} className="mt-3 rounded border p-2">Preparer une demande</button></article>)}</div>
+        <h3 className="mt-5 font-bold">Demande de gestion, sans execution</h3>
+        <select aria-label="Module cible" className="mt-3 w-full rounded border p-3" value={moduleRequest.moduleId} onChange={(event) => setModuleRequest({ ...moduleRequest, moduleId: event.target.value, confirmed: false })}>{supervisedModules.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+        <select aria-label="Action demandee" className="mt-3 w-full rounded border p-3" value={moduleRequest.action} onChange={(event) => setModuleRequest({ ...moduleRequest, action: event.target.value, confirmed: false })}>{['Revue du module', 'Maintenance demandee', 'Reprise demandee', 'Revue des permissions'].map((item) => <option key={item}>{item}</option>)}</select>
+        <textarea aria-label="Justification" className="mt-3 w-full rounded border p-3" value={moduleRequest.reason} onChange={(event) => setModuleRequest({ ...moduleRequest, reason: event.target.value, confirmed: false })} placeholder="Justification obligatoire" />
+        <label className="mt-3 flex gap-2"><input type="checkbox" checked={moduleRequest.confirmed} onChange={(event) => setModuleRequest({ ...moduleRequest, confirmed: event.target.checked })} />Je confirme la cible et la justification ; cette demande ne change pas le module.</label>
+        <button className="mt-3 rounded bg-omgGreen p-3 text-white" onClick={() => { const error = validateAdminModuleRequest(moduleRequest.moduleId, moduleRequest.action, moduleRequest.reason, profile?.email); if (error || !moduleRequest.confirmed) { setNotice(error || "Confirmez la demande."); return; } const result = upsertItem("admin_module_requests", { ...moduleRequest, requestedBy: profile.email, status: "draft" }); complete("Demande module", result.data.id, "Brouillon de gestion enregistre, non transmis."); setModuleRequest((current) => ({ ...current, reason: "", confirmed: false })); }}>Enregistrer le brouillon</button>
+      </Section>}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-omgGold/40 bg-slate-950 p-4 text-white">
         <div><strong className="text-omgGold">Assistant Administration</strong><p className="text-sm text-slate-300">Analyse et prepare · aucune permission ou suspension</p></div>
         <button type="button" onClick={prepareWithAssistant} className="rounded bg-omgGold px-4 py-2 font-black text-black">Preparer avec l'assistant</button>
@@ -231,15 +242,15 @@ function AdminWorkspace({ selectedAction, profile, closeModuleAction }) {
 
       {mode === "dashboard" && (
         <Section title="Dashboard global">
-          <div className="mt-4 grid gap-3 md:grid-cols-4"><div className="rounded-xl bg-slate-50 p-4"><strong>Modules supervises</strong><p className="text-2xl font-black">10</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Transactions</strong><p className="text-2xl font-black">{consolidatedTransactions.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Agents Payflow / Mailport</strong><p className="text-2xl font-black">{agents.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Cours University</strong><p className="text-2xl font-black">{universityCourses.length}</p></div></div>
+          <div className="mt-4 grid gap-3 md:grid-cols-4"><div className="rounded-xl bg-slate-50 p-4"><strong>Modules metier</strong><p className="text-2xl font-black">{supervisedModules.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Operations locales</strong><p>{consolidatedTransactions.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Fiches agents</strong><p>{agents.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Brouillons University</strong><p>{universityCourses.length}</p></div></div>
           <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4"><strong>Gouvernance :</strong> 1 seul Super Admin (fondateur). Les administrateurs futurs sont limites, sans droit de nommer d'autres administrateurs.</div>
         </Section>
       )}
 
       {mode === "revenue" && (
-        <Section title="Transactions consolidees des 10 modules">
+        <Section title="Operations locales des 11 modules — non rapprochees">
           <select className="mt-4 w-full rounded border p-3" value={moduleFilter} onChange={(e) => setModuleFilter(e.target.value)}><option>Tous</option>{businessModules.map((item) => <option key={item}>{item}</option>)}</select>
-          <div className="mt-4 grid gap-3 md:grid-cols-3"><div className="rounded-xl bg-slate-50 p-4"><strong>Transactions</strong><p className="text-2xl font-black">{filteredPayments.length}</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Volume</strong><p className="text-2xl font-black">{filteredPayments.reduce((sum, item) => sum + Number(item.amount || 0), 0).toFixed(2)} USD</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Commission indicative 4.99%</strong><p className="text-2xl font-black">{(filteredPayments.reduce((sum, item) => sum + Number(item.amount || 0), 0) * 0.0499).toFixed(2)} USD</p></div></div>
+          <div className="mt-4 rounded-xl bg-amber-50 p-4"><p>{filteredPayments.length} operation(s) locales, pouvant inclure brouillons et simulations.</p><p>Aucun total de revenus reels ni commission globale : les frais dependent du module et les devises ne doivent pas etre additionnees.</p></div>
           <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-2">Reference</th><th className="p-2">Module</th><th className="p-2">Type</th><th className="p-2">Montant</th><th className="p-2">Statut</th><th className="p-2">Date</th></tr></thead><tbody>{filteredPayments.map((item, index) => <tr key={item.id || item.reference || index} className="border-b"><td className="p-2">{item.id || item.reference || "-"}</td><td className="p-2 font-bold">{item.module}</td><td className="p-2">{item.kind}</td><td className="p-2">{Number(item.amount || 0).toFixed(2)} {item.currency || "USD"}</td><td className="p-2">{item.status || "confirme"}</td><td className="p-2">{item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "-"}</td></tr>)}</tbody></table>{!filteredPayments.length && <p className="p-4 text-slate-500">Aucune transaction enregistree pour ce filtre.</p>}</div>
         </Section>
       )}
@@ -280,7 +291,7 @@ function AdminWorkspace({ selectedAction, profile, closeModuleAction }) {
       )}
 
       {mode === "audit" && (
-        <Section title="Audit immuable">
+        <Section title="Journal local — non inviolable">
           <div className="mt-4 space-y-3">{!audit.length && <p>Aucun evenement.</p>}{audit.map((item) => <article key={item.id} className="rounded-xl bg-slate-50 p-4"><strong>{item.action}</strong><p>{item.actor} · {item.target}</p><p>{item.details}</p><p className="text-xs text-slate-500">Lecture seule · {item.occurredAt}</p></article>)}</div>
         </Section>
       )}
@@ -294,12 +305,6 @@ function AdminWorkspace({ selectedAction, profile, closeModuleAction }) {
 
       {mode === "country-reports" && (
         <Section title="Rapport pays"><p className="mt-4 rounded-xl bg-slate-50 p-4 font-bold">{country} · {agents.filter((item) => item.country === country).length} agent(s) · {payments.length} transaction(s) plateforme · {incidents.length} incident(s)</p></Section>
-      )}
-
-      {mode === "module-reports" && (
-        <Section title="Rapports par module">
-          <div className="mt-4 grid gap-3 md:grid-cols-3">{platformModules.map((item) => <article key={item} className="rounded-xl bg-slate-50 p-4"><strong>{item}</strong><p>{(activitiesByModule[normalize(item).replace(/\s+/g, "-")] || []).length} activite(s)</p></article>)}</div>
-        </Section>
       )}
 
       {mode === "incidents" && (

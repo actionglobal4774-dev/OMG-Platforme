@@ -1,9 +1,10 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login: loginUser } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,7 +18,10 @@ function Login() {
     }
     try {
       await loginUser({ email, password });
-      navigate("/dashboard", { replace: true });
+      const requestedPath = location.state?.from;
+      const destination = typeof requestedPath === "string" && requestedPath.startsWith("/") && !requestedPath.startsWith("//") && !/^\/(login|register)(\/|\?|#|$)/.test(requestedPath)
+        ? requestedPath : "/dashboard";
+      navigate(destination, { replace: true });
     } catch (authError) {
       setError(authError?.message || "Connexion impossible.");
     }

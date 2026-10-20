@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { validateStoreAddress, validateStorePhoto, validateStoreProduct } from '../src/modules/store/storeFormValidation.js';
+const shops = [{ id: 's', owner: 'seller@test' }];
+const product = { shopId: 's', name: 'Sac', category: 'Mode', description: 'Sac exemple', price: '10', stock: '0' };
+assert.equal(validateStoreProduct(product, shops, 'seller@test'), '');
+for (const change of [{ shopId: 'bad' }, { price: 'NaN' }, { stock: '1.5' }, { description: '' }]) assert.ok(validateStoreProduct({ ...product, ...change }, shops, 'seller@test'));
+assert.ok(validateStoreProduct(product, shops, 'other@test'));
+assert.equal(validateStorePhoto({ type: 'image/jpeg', size: 500 }), '');
+assert.ok(validateStorePhoto({ type: 'text/html', size: 500 }));
+assert.equal(validateStoreAddress({ reference: 'purchase-1', recipient: 'Client' }), '');
+assert.ok(validateStoreAddress({ reference: '{"token":"secret"}', recipient: 'Client' }));
+console.log('Store : 10 assertions formulaires reussies.');

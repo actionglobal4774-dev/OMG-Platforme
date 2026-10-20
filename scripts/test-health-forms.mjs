@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { validateHealthPrescription, validateHealthVitals } from '../src/modules/health/healthFormValidation.js';
+const vitals = { patientRef: 'example', temperature: '37', temperatureUnit: 'C', pulse: '80', pressure: '120/80' };
+assert.equal(validateHealthVitals(vitals, 'Infirmier'), '');
+assert.ok(validateHealthVitals(vitals, 'Patient'));
+for (const changes of [{ temperature: 'NaN' }, { pulse: '-1' }, { pressure: 'invalid' }, { temperatureUnit: '' }]) assert.ok(validateHealthVitals({ ...vitals, ...changes }, 'Infirmier'));
+const prescription = { patientRef: 'example', medication: 'Exemple fictif', dosage: 'Saisie professionnelle', duration: 'Saisie professionnelle', route: 'Saisie professionnelle', frequency: 'Saisie professionnelle', reviewed: true };
+assert.equal(validateHealthPrescription(prescription, 'Medecin'), '');
+assert.ok(validateHealthPrescription(prescription, 'Patient'));
+assert.ok(validateHealthPrescription({ ...prescription, reviewed: false }, 'Medecin'));
+assert.ok(validateHealthPrescription({ ...prescription, route: '' }, 'Medecin'));
+console.log('Sante : 10 assertions formulaires et roles reussies.');

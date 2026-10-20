@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { ownsRestaurant, validateRestaurantResource, validateRestaurantTable } from '../src/modules/restaurant/restaurantFormValidation.js';
+assert.equal(ownsRestaurant([{ id: 'r', owner: 'owner@test' }], 'r', 'OWNER@test'), true);
+assert.equal(ownsRestaurant([], 'r', 'owner@test'), false);
+assert.equal(validateRestaurantResource({ kind: 'Table', name: 'Table 1', stock: '4', price: '' }), '');
+assert.ok(validateRestaurantResource({ kind: 'Table', name: 'Table 1', stock: '0' }));
+assert.ok(validateRestaurantResource({ kind: 'Chambre', name: '201', stock: '1', price: '95', capacity: '0' }));
+assert.equal(validateRestaurantResource({ kind: 'Chambre', name: '201', stock: '1', price: '95', capacity: '2' }), '');
+const table = { id: 't', available: true, capacity: 4 };
+const request = { guests: '2', date: '2027-01-01', time: '19:00' };
+assert.equal(validateRestaurantTable(request, table, []), '');
+assert.ok(validateRestaurantTable({ ...request, guests: '5' }, table, []));
+assert.ok(validateRestaurantTable(request, table, [{ ...request, tableId: 't', status: 'requested' }]));
+console.log('Restaurants : 9 assertions formulaires et capacites reussies.');

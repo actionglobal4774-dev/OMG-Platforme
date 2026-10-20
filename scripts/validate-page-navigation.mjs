@@ -49,4 +49,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`OK: ${seenUrls.size} pages directes contrôlées individuellement, sans URL doublée ni navigation générique active.`);
+console.log(`OK: inventaire statique de ${seenUrls.size} URL de section, sans URL doublée. Ce contrôle ne valide pas les boutons, les écrans distincts ni les parcours dans le navigateur.`);

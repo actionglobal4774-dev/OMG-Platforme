@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { ownsStoreProduct, validStoreQuote, validateStoreCart } from '../src/modules/store/storeJourney.js';
+const product = { id: 'p', price: 20, stock: 2, currency: 'USD', seller: 'seller@test' };
+assert.equal(validateStoreCart([{ ...product, quantity: 2 }], [product]), '');
+for (const quantity of [0, -1, 3, 1.5]) assert.ok(validateStoreCart([{ ...product, quantity }], [product]));
+assert.ok(validateStoreCart([], [product]));
+assert.ok(validateStoreCart([{ ...product, price: 1, quantity: 1 }], [product]));
+assert.ok(validateStoreCart([{ ...product, quantity: 1 }, { ...product, quantity: 1 }], [product]));
+assert.ok(validateStoreCart([{ ...product, quantity: 1 }], [{ ...product, currency: 'EUR' }]));
+assert.equal(ownsStoreProduct(product, 'SELLER@test'), true);
+assert.equal(ownsStoreProduct(product, 'other@test'), false);
+const quote = { orderId: 'order', total: 25, deliveryFee: 5, currency: 'USD' };
+assert.equal(validStoreQuote(quote), true);
+for (const changes of [{ total: NaN }, { total: -1 }, { deliveryFee: -1 }, { currency: 'EUR' }, { orderId: '' }]) assert.equal(validStoreQuote({ ...quote, ...changes }), false);
+console.log('Store : 17 assertions panier, proprietaire et devis serveur reussies.');

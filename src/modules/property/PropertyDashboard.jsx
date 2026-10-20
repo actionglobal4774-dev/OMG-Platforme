@@ -1,7 +1,7 @@
 import React from "react";
 import ModuleDashboardTemplate from "../../components/modules/ModuleDashboardTemplate";
 import { getModuleById } from "../../data/modules";
-import PropertyWorkspace from "./PropertyWorkspace";
+import ModuleActionDestination from "../../components/modules/ModuleActionDestination";
 
 const propertyMenuActions = [
   "Publier un bien",
@@ -18,8 +18,8 @@ function PropertyDashboard() {
       compactMenu
       menuActions={propertyMenuActions}
       suppressCompactActionFooter
-      renderCompactAction={({ selectedAction, profile, closeModuleAction }) => (
-        <PropertyWorkspace selectedAction={selectedAction} profile={profile} closeModuleAction={closeModuleAction} />
+      renderCompactAction={({ selectedAction }) => (
+        <ModuleActionDestination moduleId="property" action={selectedAction} />
       )}
     />
   );

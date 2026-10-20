@@ -1,14 +1,16 @@
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { countries, getCountryByCode, getCountryServiceCharge } from "../../data/globalOptions";
 import { payflowSpecialServiceDelays } from "../../data/payflowTiming";
+import { readPayflowEvents, recordPayflowEvent } from "../../services/payflowJourney";
 
 function createReference() {
   return `PF-COUNTRY-${Date.now().toString().slice(-6)}`;
 }
 
 function PayflowSpecialServices({ selectedAction = "" }) {
+  const [searchParams] = useSearchParams();
   const { t } = useTranslation();
   const label = (key, fallback) => t(key, { defaultValue: fallback });
   const [draft, setDraft] = useState({
@@ -18,8 +20,9 @@ function PayflowSpecialServices({ selectedAction = "" }) {
   });
   const [confirmation, setConfirmation] = useState(null);
   const [error, setError] = useState("");
-  const [caseDraft, setCaseDraft] = useState({ reference: "", details: "", pin: "", confirmed: false });
+  const [caseDraft, setCaseDraft] = useState({ reference: searchParams.get("reference") || "", details: "", pin: "", confirmed: false });
   const [caseResult, setCaseResult] = useState("");
+  const [trackedEvent, setTrackedEvent] = useState(null);
   const normalizedAction = String(selectedAction).toLowerCase();
   const isDispute = normalizedAction.includes("litige") || normalizedAction.includes("dispute");
   const isTracking = normalizedAction.includes("track") || normalizedAction.includes("suivi");
@@ -92,6 +95,13 @@ function PayflowSpecialServices({ selectedAction = "" }) {
       setError(isTracking ? "Veuillez entrer la reference du transfert." : "Veuillez entrer la reference de la transaction contestee.");
       return;
     }
+    if (isTracking) {
+      const event = readPayflowEvents().find((item) => item.reference === caseDraft.reference.trim());
+      setTrackedEvent(event || null);
+      if (!event) { setError("Cette référence ne figure pas dans l'historique de cet appareil. Le suivi serveur reste à connecter."); return; }
+      setCaseResult(event.reference);
+      return;
+    }
     if (isDispute && caseDraft.details.trim().length < 10) {
       setError("Veuillez expliquer le probleme en au moins 10 caracteres.");
       return;
@@ -104,7 +114,10 @@ function PayflowSpecialServices({ selectedAction = "" }) {
       setError("Veuillez confirmer les informations avant de continuer.");
       return;
     }
-    setCaseResult(`${isTracking ? "PF-TRACK" : "PF-DISPUTE"}-${Date.now().toString().slice(-6)}`);
+    const reference = `PF-DISPUTE-${Date.now()}`;
+    recordPayflowEvent({ reference, type: "dispute", status: "prepared" });
+    setCaseResult(reference);
+    setCaseDraft((current) => ({ ...current, pin: "", confirmed: false }));
   };
 
   if (isDispute || isTracking) {
@@ -123,6 +136,7 @@ function PayflowSpecialServices({ selectedAction = "" }) {
             onChange={(event) => setCaseDraft({ ...caseDraft, pin: event.target.value.replace(/\D/g, "").slice(0, 4) })}
             className="rounded border border-gray-700 bg-black p-3 text-white"
             type="password"
+            hidden={isTracking}
             inputMode="numeric"
             maxLength="4"
             placeholder="PIN Payflow"
@@ -137,7 +151,7 @@ function PayflowSpecialServices({ selectedAction = "" }) {
             />
           )}
         </div>
-        <label className="mt-4 flex items-start gap-3 rounded-xl border border-omgGreen/40 bg-green-950/20 p-3 text-sm text-gray-200">
+        <label hidden={isTracking} className="mt-4 items-start gap-3 rounded-xl border border-omgGreen/40 bg-green-950/20 p-3 text-sm text-gray-200">
           <input
             type="checkbox"
             checked={caseDraft.confirmed}
@@ -151,7 +165,9 @@ function PayflowSpecialServices({ selectedAction = "" }) {
         </button>
         {caseResult && (
           <div className="mt-4 rounded-xl border border-omgGreen bg-green-950/40 p-3 text-sm font-semibold text-green-200">
-            {isTracking ? "Suivi prepare" : "Litige enregistre"} : {caseResult}
+            {isTracking ? "Référence retrouvée dans l'historique local" : "Brouillon de litige préparé, transmission à connecter"} : {caseResult}
+            {trackedEvent && <p className="mt-2">État enregistré : {trackedEvent.status}. Ce statut local ne remplace pas la confirmation financière du serveur.</p>}
+            <Link to="/payflow/transactions" className="mt-3 inline-block underline">Consulter l'historique</Link>
           </div>
         )}
       </form>
@@ -175,7 +191,7 @@ function PayflowSpecialServices({ selectedAction = "" }) {
         </div>
       </div>
 
-      <form onSubmit={submitCountryChange} className="omg-card rounded-xl p-5">
+      {selectedAction && <form onSubmit={submitCountryChange} className="omg-card rounded-xl p-5">
         <h3 className="text-xl font-bold text-omgGold">{label("payflow_change_country_currency", "Changer de pays / devise")}</h3>
         <p className="mt-2 text-sm text-gray-300">
           {label("payflow_country_currency_rule", "Dans Payflow, changer de pays change automatiquement la devise du compte. Les frais fixes sont de 4.99 USD ou equivalent local.")}
@@ -256,7 +272,7 @@ function PayflowSpecialServices({ selectedAction = "" }) {
             {" "}{label("payflow_delivery_delay", "Delai estime")}: {confirmation.delay}
           </div>
         )}
-      </form>
+      </form>}
     </section>
   );
 }

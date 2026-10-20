@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { duplicateSchoolClass, validateSchoolFeePeriod, validateSchoolReportContext } from '../src/modules/school/schoolFormValidation.js';
+const schools = [{ id: 's', owner: 'owner@test' }], classes = [{ id: 'c', schoolId: 's', name: 'Classe A', level: '1' }];
+const report = { schoolId: 's', classId: 'c', schoolYear: '2026-2027' };
+assert.equal(validateSchoolReportContext(report, schools, classes, 'owner@test'), '');
+assert.ok(validateSchoolReportContext(report, schools, classes, 'other@test'));
+assert.ok(validateSchoolReportContext({ ...report, classId: 'bad' }, schools, classes, 'owner@test'));
+assert.equal(duplicateSchoolClass(classes, { schoolId: 's', name: 'classe a', level: '1' }), true);
+assert.equal(duplicateSchoolClass(classes, { schoolId: 'other', name: 'Classe A', level: '1' }), false);
+assert.equal(validateSchoolFeePeriod({ currency: 'HTG', schoolYear: '2026-2027', period: 'Trimestre 1' }), '');
+assert.ok(validateSchoolFeePeriod({ currency: 'USD' }));
+console.log('School : 7 assertions contexte, classes et facturation reussies.');

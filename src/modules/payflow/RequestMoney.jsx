@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import PayflowReview from "./PayflowReview";
+import PayflowOutcome from "./PayflowOutcome";
 import { useTranslation } from "react-i18next";
 import { requestMoney } from "../../services/payflowService";
 
@@ -16,9 +18,13 @@ function RequestMoney() {
   });
   const [reference, setReference] = useState("");
   const [error, setError] = useState("");
+  const [phase, setPhase] = useState("entry");
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
 
   const submit = async (event) => {
     event.preventDefault();
+    if (pending.current) return;
     setError("");
     setReference("");
 
@@ -28,11 +34,12 @@ function RequestMoney() {
       return;
     }
 
-    if (!amount || amount <= 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       setError(label("payflow_amount_required", "Veuillez entrer un montant valide."));
       return;
     }
 
+    if (phase === "entry") { setPhase("review"); setData((current) => ({ ...current, pin: "", confirmed: false })); return; }
     if (!/^\d{4}$/.test(data.pin)) {
       setError(label("payflow_pin_required", "Veuillez entrer votre PIN Payflow a 4 chiffres."));
       return;
@@ -43,13 +50,22 @@ function RequestMoney() {
       return;
     }
 
+    pending.current = true;
+    setBusy(true);
     try {
       const response = await requestMoney({ ...data, amount });
       setReference(response.data || null);
     } catch (submissionError) {
       setError(submissionError?.message || "La demande n'a pas pu etre preparee.");
+    } finally {
+      pending.current = false;
+      setBusy(false);
+      setData((current) => ({ ...current, pin: "", confirmed: false }));
     }
   };
+
+  if (reference) return <PayflowOutcome result={reference} amount={data.amount} currency={data.currency} onRestart={() => { setReference(""); setPhase("entry"); setData((current) => ({ ...current, amount: "", pin: "", confirmed: false })); }} />;
+  if (phase === "review") return <PayflowReview title="Vérifier la demande d'argent" rows={[["Payeur", data.payer], ["Montant", `${Number(data.amount).toFixed(2)} ${data.currency}`], ["Méthode", data.method], ["Motif", data.note || "Non renseigné"]]} pin={data.pin} confirmed={data.confirmed} onPin={(pin) => setData((current) => ({ ...current, pin }))} onConfirmed={(confirmed) => setData((current) => ({ ...current, confirmed }))} onSubmit={submit} onEdit={() => { setPhase("entry"); setError(""); setData((current) => ({ ...current, pin: "", confirmed: false })); }} busy={busy} error={error} />;
 
   return (
     <form onSubmit={submit} className="omg-card mt-6 rounded-xl p-5">
@@ -91,6 +107,7 @@ function RequestMoney() {
         <input
           className="rounded border border-gray-700 bg-black p-3 text-white"
           type="password"
+          hidden
           inputMode="numeric"
           maxLength="4"
           placeholder="PIN Payflow"
@@ -104,7 +121,7 @@ function RequestMoney() {
         <div>{label("request_method", "Methode de demande")}: {data.method}</div>
         <div>{label("payflow_delivery_delay", "Delai estime")}: {label("payflow_request_delay", "Notification ou lien disponible immediatement; paiement selon le moyen choisi par le payeur.")}</div>
       </div>
-      <label className="mt-4 flex items-start gap-3 rounded-xl border border-omgGreen/40 bg-green-950/20 p-3 text-sm text-gray-200">
+      <label hidden className="mt-4 items-start gap-3 rounded-xl border border-omgGreen/40 bg-green-950/20 p-3 text-sm text-gray-200">
         <input
           type="checkbox"
           className="mt-1"
@@ -119,7 +136,7 @@ function RequestMoney() {
         </div>
       )}
       <button type="submit" className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">
-        {label("payflow_create_request_now", "Creer la demande maintenant")}
+        Vérifier les informations
       </button>
       {reference && (
         <div className="mt-4 rounded-xl border border-omgGreen bg-green-950/40 p-3 text-sm font-semibold text-green-200">

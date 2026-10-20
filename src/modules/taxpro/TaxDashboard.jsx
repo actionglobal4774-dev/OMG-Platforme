@@ -1,7 +1,7 @@
 import React from "react";
 import ModuleDashboardTemplate from "../../components/modules/ModuleDashboardTemplate";
 import { getModuleById } from "../../data/modules";
-import TaxWorkspace from "./TaxWorkspace";
+import ModuleActionDestination from "../../components/modules/ModuleActionDestination";
 
 function TaxDashboard() {
   const module = getModuleById("tax");
@@ -11,8 +11,8 @@ function TaxDashboard() {
       compactMenu
       menuActions={module.actions}
       suppressCompactActionFooter
-      renderCompactAction={({ selectedAction, profile, closeModuleAction }) => (
-        <TaxWorkspace selectedAction={selectedAction} profile={profile} closeModuleAction={closeModuleAction} />
+      renderCompactAction={({ selectedAction }) => (
+        <ModuleActionDestination moduleId="tax" action={selectedAction} />
       )}
     />
   );

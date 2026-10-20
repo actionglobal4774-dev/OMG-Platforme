@@ -1,7 +1,7 @@
 import React from "react";
 import ModuleDashboardTemplate from "../../components/modules/ModuleDashboardTemplate";
 import { getModuleById } from "../../data/modules";
-import SchoolWorkspace from "./SchoolWorkspace";
+import ModuleActionDestination from "../../components/modules/ModuleActionDestination";
 
 function SchoolDashboard() {
   const module = getModuleById("school");
@@ -11,8 +11,8 @@ function SchoolDashboard() {
       compactMenu
       menuActions={module.actions}
       suppressCompactActionFooter
-      renderCompactAction={({ selectedAction, profile, closeModuleAction }) => (
-        <SchoolWorkspace selectedAction={selectedAction} profile={profile} closeModuleAction={closeModuleAction} />
+      renderCompactAction={({ selectedAction }) => (
+        <ModuleActionDestination moduleId="school" action={selectedAction} />
       )}
     />
   );

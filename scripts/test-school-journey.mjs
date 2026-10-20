@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { canReadSchoolReport, ownsSchool, validateSchoolBooks } from '../src/modules/school/schoolJourney.js';
+const books = [{ id: 'book', price: 24, stock: 2 }];
+assert.equal(validateSchoolBooks([{ ...books[0], quantity: 2 }], books), '');
+for (const quantity of [0, -1, 3, 1.5]) assert.ok(validateSchoolBooks([{ ...books[0], quantity }], books));
+assert.ok(validateSchoolBooks([{ id: 'book', price: 10, quantity: 1 }], books));
+assert.ok(validateSchoolBooks([], books));
+assert.equal(ownsSchool([{ id: 'school', owner: 'owner@test' }], 'school', 'OWNER@test'), true);
+assert.equal(ownsSchool([{ id: 'school', owner: 'owner@test' }], 'school', 'other@test'), false);
+const report = { guardianEmail: 'parent@test', accessCode: '123456' };
+assert.equal(canReadSchoolReport(report, 'PARENT@test', '123456'), true);
+assert.equal(canReadSchoolReport(report, 'other@test', '123456'), false);
+assert.equal(canReadSchoolReport(report, 'parent@test', '000000'), false);
+assert.equal(canReadSchoolReport(report, '', '123456'), false);
+console.log('School : 13 assertions stock, propriete et lecture de rapport reussies.');

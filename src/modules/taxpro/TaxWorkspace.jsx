@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
+import { canUseTaxFile, validateTaxDraft } from "./taxFormValidation";
 import {
   generateReceipt,
   getCollection,
@@ -24,7 +25,7 @@ function getMode(action) {
   return "file";
 }
 
-function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
+function TaxWorkspace({ selectedAction, profile, closeModuleAction, initialReference = "" }) {
   const mode = getMode(selectedAction);
   const [taxFile, setTaxFile] = useState({
     taxYear: "2026",
@@ -45,9 +46,14 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
   const [review, setReview] = useState({ fileId: "", notes: "", status: "needs-review", ptinLast4: "" });
   const [notice, setNotice] = useState("");
   const [reference, setReference] = useState("");
+  const [selectedFileId, setSelectedFileId] = useState(initialReference);
+  const [confirmedDraft, setConfirmedDraft] = useState(false);
+  const [paymentReview, setPaymentReview] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
 
-  const files = getCollection("tax_files");
-  const documents = getCollection("tax_documents");
+  const files = getCollection("tax_files").filter((item) => canUseTaxFile(item, profile));
+  const documents = getCollection("tax_documents").filter((item) => item.owner === profile?.email && item.fileId === selectedFileId);
   const analyses = getCollection("tax_analyses");
   const reviews = getCollection("tax_reviews");
   const submissions = getCollection("tax_submission_packages");
@@ -97,6 +103,8 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const saveFile = () => {
+    const error = validateTaxDraft(taxFile);
+    if (error || !confirmedDraft) { setNotice(error || "Confirmez la relecture du brouillon."); return; }
     if (profile?.country !== "United States" && taxFile.state === "") {
       setNotice("Ce service est reserve aux dossiers fiscaux des Etats-Unis.");
       return;
@@ -118,24 +126,31 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
       usaOnly: true
     });
     complete("Dossier fiscal", result.data.id, "Dossier fiscal brouillon enregistre avec identifiant masque.");
+    setSelectedFileId(result.data.id);
+    setConfirmedDraft(false);
   };
 
   const saveDocument = () => {
+    const file = files.find((item) => item.id === selectedFileId);
+    if (!file || document.taxYear !== file.taxYear) { setNotice("Choisissez un dossier accessible de la meme annee fiscale."); return; }
     if (!document.fileName || !document.issuer.trim() || !document.confirmed) {
       setNotice("Document, emetteur et confirmation du classement sont obligatoires.");
       return;
     }
     const result = upsertItem("tax_documents", {
       ...document,
+      fileId: selectedFileId,
       owner: profile?.email,
       storage: "local-mock",
-      status: "received",
+      status: "metadata-only",
       sensitive: true
     });
     complete("Document fiscal", result.data.id, "Metadonnees du document enregistrees localement. Aucun envoi IRS.");
   };
 
   const saveAnalysis = () => {
+    const file = files.find((item) => item.id === selectedFileId);
+    if (!file || !Number.isFinite(Number(answers.estimatedPayments)) || Number(answers.estimatedPayments) < 0) { setNotice("Dossier accessible et paiements estimes valides obligatoires."); return; }
     if (!answers.confirmed) {
       setNotice("Confirmez que les reponses ont ete relues.");
       return;
@@ -146,8 +161,9 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
     if (!documents.length) warnings.push("Aucun document fiscal classe");
     const result = upsertItem("tax_analyses", {
       taxpayer: profile?.email,
+      fileId: selectedFileId,
       answers,
-      calculation,
+      calculation: file.totals,
       warnings,
       status: warnings.length ? "review-required" : "prepared",
       disclaimer: "Estimation illustrative, non conseil fiscal"
@@ -156,39 +172,47 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
   };
 
   const signFile = () => {
+    if (!files.some((item) => item.id === selectedFileId)) { setNotice("Selectionnez votre dossier avant de preparer une signature."); return; }
     if (!signature.legalName.trim() || !signature.date || !signature.consent || !signature.accuracy) {
       setNotice("Nom legal, date et deux confirmations humaines sont obligatoires.");
       return;
     }
     const result = upsertItem("tax_signatures", {
       legalName: signature.legalName,
+      fileId: selectedFileId,
       date: signature.date,
       consent: true,
       accuracyConfirmed: true,
       taxpayer: profile?.email,
-      signedByHuman: true,
-      status: "signed"
+      signedByHuman: false,
+      status: "signature-draft"
     });
-    complete("Signature electronique", result.data.id, "Signature humaine enregistree. Aucune soumission IRS effectuee.");
+    complete("Signature electronique", result.data.id, "Intention de signature locale uniquement, sans signature electronique verifiee ni soumission IRS.");
   };
 
-  const payService = async () => {
+  const payService = async (confirmed = false) => {
+    if (pending.current) return;
+    if (!files.some((item) => item.id === selectedFileId)) { setNotice("Choisissez votre dossier."); return; }
     const amount = Number(payment.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
       setNotice("Montant du service invalide.");
-      return;
-    }
-    if (payment.method === "Payflow" && !/^\d{4}$/.test(payment.pin)) {
-      setNotice("Entrez un PIN Payflow a 4 chiffres.");
       return;
     }
     if (!payment.confirmed) {
       setNotice("Confirmez le service, le prix et le moyen de paiement.");
       return;
     }
-    const paid = simulatePayment({ amount, currency: "USD", label: `Tax Service · ${payment.service}`, method: payment.method });
-    generateReceipt(paid.data);
-    complete("Paiement service fiscal", paid.data.id, "Service fiscal paye. Les donnees fiscales ne sont pas incluses dans la transaction.");
+    if (!confirmed) { setPaymentReview(true); return; }
+    pending.current = true; setBusy(true);
+    try {
+      const paid = await prepareModulePayment({ moduleId: "tax", action: "Payer service", amount, currency: "USD", label: `Tax Service · ${payment.service}`, method: payment.method });
+      if (!paid.ok) throw new Error(paid.error || "Preparation impossible.");
+      if (!paid.live) generateReceipt(paid.data);
+      setPaymentReview(false);
+      setPayment((current) => ({ ...current, pin: "", confirmed: false }));
+      complete("Paiement service fiscal", paid.data.id, paid.live ? "Demande de paiement preparee, reglement non confirme." : "Simulation uniquement, aucun paiement reel.");
+    } catch (error) { setNotice(error?.message || "Preparation impossible."); }
+    finally { pending.current = false; setBusy(false); }
   };
 
   const saveReview = (kind) => {
@@ -212,8 +236,12 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
 
   const Section = ({ title, children }) => <section className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="text-lg font-black text-slate-900">{title}</h3>{children}</section>;
 
+  if (paymentReview) return <Section title="Verifier la preparation du paiement"><p className="mt-3">Dossier {selectedFileId} · {payment.service} · {payment.amount} USD · {payment.method}</p><p>Cette etape ne paie pas un impot et ne transmet aucune declaration.</p><button disabled={busy} onClick={() => payService(true)} className="mt-3 rounded bg-omgGreen p-3 text-white">{busy ? "Preparation…" : "Confirmer la demande"}</button><button disabled={busy} onClick={() => setPaymentReview(false)} className="ml-3 rounded border p-3">Modifier / annuler</button>{notice && <p role="alert">{notice}</p>}</Section>;
+
   return (
     <div className="mt-5 space-y-5">
+      <p className="rounded-xl bg-amber-50 p-4 text-amber-900">Prototype de preparation : stockage local non certifie. Utilisez uniquement des donnees fictives. Aucun calcul fiscal officiel, signature verifiee ou depot IRS.</p>
+      <label className="block rounded-xl border bg-white p-4">Dossier concerne<select aria-label="Dossier concerne" className="mt-2 w-full rounded border p-3" value={selectedFileId} onChange={(event) => { setSelectedFileId(event.target.value); setReview((current) => ({ ...current, fileId: event.target.value })); }}><option value="">Choisir explicitement un dossier</option>{files.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.taxYear}</option>)}</select></label>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-omgGold/40 bg-slate-950 p-4 text-white">
         <div><strong className="text-omgGold">Assistant Tax</strong><p className="text-sm text-slate-300">Prepare et explique · aucune signature ou soumission</p></div>
         <button type="button" onClick={prepareWithAssistant} className="rounded bg-omgGold px-4 py-2 font-black text-black">Preparer avec l'assistant</button>
@@ -234,7 +262,7 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
             <input aria-label="Personnes a charge" type="number" min="0" className="rounded border p-3" value={taxFile.dependents} onChange={(e) => setTaxFile({ ...taxFile, dependents: e.target.value })} />
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3"><div className="rounded-xl bg-slate-50 p-4"><strong>Revenus</strong><p className="text-xl font-black">{calculation.income.toFixed(2)} USD</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Base indicative</strong><p className="text-xl font-black">{calculation.taxable.toFixed(2)} USD</p></div><div className="rounded-xl bg-slate-50 p-4"><strong>Estimation illustrative</strong><p className="text-xl font-black">{calculation.illustrativeTax.toFixed(2)} USD</p></div></div>
-          <button type="button" onClick={saveFile} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer le brouillon</button>
+          <p className="mt-3 text-sm">Saisissez 0 pour chaque montant absent. Les chiffres affiches ne constituent pas un calcul d'impot officiel.</p><label className="mt-3 flex gap-2"><input type="checkbox" checked={confirmedDraft} onChange={(event) => setConfirmedDraft(event.target.checked)} />J'ai relu l'annee, l'Etat et chaque montant du brouillon.</label><button type="button" onClick={saveFile} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Enregistrer le brouillon</button>
         </Section>
       )}
 
@@ -272,9 +300,9 @@ function TaxWorkspace({ selectedAction, profile, closeModuleAction }) {
           <select className="mt-4 w-full rounded border p-3" value={payment.service} onChange={(e) => { const prices = { "Preparation standard": "99", "Revue CPA": "149", "Dossier entreprise": "249" }; setPayment({ ...payment, service: e.target.value, amount: prices[e.target.value] }); }}><option>Preparation standard</option><option>Revue CPA</option><option>Dossier entreprise</option></select>
           <p className="mt-3 rounded-xl bg-slate-50 p-4 text-xl font-black">{payment.amount} USD</p>
           <select className="mt-3 w-full rounded border p-3" value={payment.method} onChange={(e) => setPayment({ ...payment, method: e.target.value })}><option>Payflow</option><option>Carte bancaire</option><option>Banque</option></select>
-          {payment.method === "Payflow" && <input placeholder="PIN Payflow" maxLength="4" className="mt-3 w-full rounded border p-3" value={payment.pin} onChange={(e) => setPayment({ ...payment, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })} />}
+          <p className="mt-3">Aucun PIN requis pour preparer une demande. Prix indicatif du prototype, a verifier sur le serveur.</p>
           <label className="mt-3 flex gap-2"><input type="checkbox" checked={payment.confirmed} onChange={(e) => setPayment({ ...payment, confirmed: e.target.checked })} /> Je confirme le service et le prix affiche.</label>
-          <button type="button" onClick={payService} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Payer le service</button>
+          <button type="button" onClick={() => payService()} className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">Verifier la demande</button>
           <p className="mt-3 text-sm font-bold text-slate-600">{taxPayments.length} paiement(s) de service fiscal.</p>
         </Section>
       )}

@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import PayflowReview from "./PayflowReview";
+import PayflowOutcome from "./PayflowOutcome";
 import { useTranslation } from "react-i18next";
 import { countries, getCountryByCode } from "../../data/globalOptions";
 import { getBanksForCountry } from "../../data/payflowBanks";
@@ -30,6 +32,9 @@ function SendMoney() {
   });
   const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
+  const [phase, setPhase] = useState("entry");
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
 
   const amount = Number(data.amount || 0);
   const isBankTransfer = data.method === "international-bank" || data.method === "bank-transfer";
@@ -41,9 +46,10 @@ function SendMoney() {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (pending.current) return;
     setError("");
 
-    if (!amount || amount <= 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       setError(label("payflow_amount_required", "Veuillez entrer un montant valide."));
       return;
     }
@@ -59,6 +65,11 @@ function SendMoney() {
       return;
     }
 
+    if (phase === "entry") {
+      setData((current) => ({ ...current, pin: "", confirmTransfer: false }));
+      setPhase("review");
+      return;
+    }
     if (!/^\d{4}$/.test(data.pin)) {
       setError(label("payflow_pin_required", "Veuillez entrer votre PIN Payflow a 4 chiffres."));
       return;
@@ -69,13 +80,22 @@ function SendMoney() {
       return;
     }
 
+    pending.current = true;
+    setBusy(true);
     try {
       const response = await sendMoney({ ...data, fee, total, deliveryDelay, userCountry: payflowProfile?.country || "" });
       setReceipt(response.data || null);
     } catch (submissionError) {
       setError(submissionError?.message || "Le transfert n'a pas pu etre prepare.");
+    } finally {
+      pending.current = false;
+      setBusy(false);
+      setData((current) => ({ ...current, pin: "", confirmTransfer: false }));
     }
   };
+
+  if (receipt) return <PayflowOutcome result={receipt} amount={amount} currency={data.currency} onRestart={() => { setReceipt(null); setError(""); setPhase("entry"); setData((current) => ({ ...current, amount: "", pin: "", confirmTransfer: false })); }} />;
+  if (phase === "review") return <PayflowReview title="Vérifier le transfert" rows={[["Bénéficiaire", isBankTransfer ? data.accountHolder : data.receiver], ["Montant", `${amount.toFixed(2)} ${data.currency}`], ["Frais estimés", `${fee.toFixed(2)} ${data.currency}`], ["Total indicatif", `${total.toFixed(2)} ${data.currency}`], ["Délai estimé", deliveryDelay]]} pin={data.pin} confirmed={data.confirmTransfer} onPin={(pin) => setData((current) => ({ ...current, pin }))} onConfirmed={(confirmTransfer) => setData((current) => ({ ...current, confirmTransfer }))} onSubmit={submit} onEdit={() => { setPhase("entry"); setError(""); setData((current) => ({ ...current, pin: "", confirmTransfer: false })); }} busy={busy} error={error} />;
 
   return (
     <form onSubmit={submit} className="omg-card mt-6 rounded-xl p-5">
@@ -108,7 +128,7 @@ function SendMoney() {
           <option value="international">International - frais 3.25%</option>
         </select>
         <input className="rounded border border-gray-700 bg-black p-3 text-white" placeholder={label("payflow_note_placeholder", "Motif optionnel")} value={data.note} onChange={(event) => setData({ ...data, note: event.target.value })} />
-        <input className="rounded border border-gray-700 bg-black p-3 text-white" type="password" inputMode="numeric" maxLength="4" placeholder="PIN Payflow" value={data.pin} onChange={(event) => setData({ ...data, pin: event.target.value })} />
+        <p className="text-sm text-gray-300">Le PIN et votre confirmation seront demandés à l'étape suivante.</p>
       </div>
       {isBankTransfer && (
         <div className="mt-4 rounded-xl border border-omgGold/30 bg-black/40 p-4">
@@ -164,7 +184,7 @@ function SendMoney() {
         <div>{label("payflow_delivery_delay", "Delai estime")}: {deliveryDelay}</div>
         <div className="font-bold text-omgGold">{label("total", "Total")}: {total.toFixed(2)} {data.currency}</div>
       </div>
-      <label className="mt-4 flex items-start gap-3 rounded-xl border border-omgGreen/40 bg-green-950/20 p-3 text-sm text-gray-200">
+      <label hidden className="mt-4 items-start gap-3 rounded-xl border border-omgGreen/40 bg-green-950/20 p-3 text-sm text-gray-200">
         <input
           type="checkbox"
           className="mt-1"
@@ -179,7 +199,7 @@ function SendMoney() {
         </div>
       )}
       <button type="submit" className="mt-4 rounded bg-omgGreen px-5 py-3 font-bold text-white">
-        {label("payflow_finalize_transaction", "Finaliser la transaction")}
+        Vérifier les informations
       </button>
       {receipt && (
         <div className="mt-4 rounded-xl border border-omgGreen bg-green-950/40 p-3 text-sm font-semibold text-green-200">
